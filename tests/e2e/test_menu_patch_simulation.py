@@ -10,7 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.run_agent import simulate_ticket_patch_flow
-from scripts.run_agent import _build_local_demo_adapter
+from scripts.run_agent import _resolve_option1_adapter
 from core.orchestrator.victor_loop import VictorLoop
 
 
@@ -43,8 +43,8 @@ def test_menu_patch_simulation_flow_completes_and_dispatches_ticket(tmp_path: Pa
     assert "VERIFY" in phases
 
 
-def test_menu_demo_adapter_completes_without_llm_credentials() -> None:
-    loop = VictorLoop(max_iterations=2, claude_adapter_module=_build_local_demo_adapter())
+def _run_menu_demo(adapter: object) -> dict[str, str]:
+    loop = VictorLoop(max_iterations=2, claude_adapter_module=adapter)
     result = loop.run(
         {
             "ticket_id": "ticket-menu-demo",
@@ -54,6 +54,30 @@ def test_menu_demo_adapter_completes_without_llm_credentials() -> None:
             },
         }
     )
+    return {
+        "status": str(result["status"]),
+        "execution_status": str(result["execution_status"]),
+    }
 
+
+def test_option1_demo_adapter_completes_without_llm_credentials(monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
+
+    adapter, message = _resolve_option1_adapter()
+    assert "modo demo determinista" in message.lower()
+
+    result = _run_menu_demo(adapter)
+    assert result["status"] == "RESUELTO"
+    assert result["execution_status"] == "COMPLETED"
+
+
+def test_option1_demo_adapter_completes_with_llm_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "demo-key")
+
+    adapter, message = _resolve_option1_adapter()
+    assert "opcion 1 usa modo demo determinista" in message.lower()
+
+    result = _run_menu_demo(adapter)
     assert result["status"] == "RESUELTO"
     assert result["execution_status"] == "COMPLETED"

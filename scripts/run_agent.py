@@ -81,13 +81,8 @@ def _interactive_menu(args: argparse.Namespace, agent_config: dict[str, Any]) ->
 
         if choice == "1":
             ticket = _load_ticket(args, agent_config)
-            adapter_override = None
-            if not _has_llm_credentials():
-                adapter_override = _build_local_demo_adapter()
-                print(
-                    "No se detectaron credenciales Claude. "
-                    "Se ejecuta un modo demo local determinista para evitar MAX_ITERATIONS."
-                )
+            adapter_override, info_message = _resolve_option1_adapter()
+            print(info_message)
             code = _run_loop(
                 ticket=ticket,
                 max_iterations=args.max_iterations,
@@ -416,6 +411,20 @@ def _extract_claude_text(payload: dict[str, Any]) -> str:
 
 def _has_llm_credentials() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"))
+
+
+def _resolve_option1_adapter() -> tuple[Any, str]:
+    if _has_llm_credentials():
+        message = (
+            "Credenciales Claude detectadas. "
+            "La opcion 1 usa modo demo determinista; usa opcion 3 para validar conectividad real."
+        )
+    else:
+        message = (
+            "No se detectaron credenciales Claude. "
+            "La opcion 1 usa modo demo determinista para evitar MAX_ITERATIONS."
+        )
+    return _build_local_demo_adapter(), message
 
 
 def _build_local_demo_adapter() -> Any:

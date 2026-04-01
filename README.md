@@ -90,7 +90,8 @@ Runtime seguro, on-premise y single-tenant para ejecutar tareas operativas con c
 Al arrancar `python scripts/run_agent.py` se muestra un menu con opciones:
 
 1. Ejecutar agente con ticket demo.
-   - Si no hay `ANTHROPIC_API_KEY` ni `CLAUDE_API_KEY`, usa un adaptador local determinista para completar la demo sin caer en `MAX_ITERATIONS`.
+   - Usa un adaptador local determinista para completar la demo sin caer en `MAX_ITERATIONS`.
+   - Aunque tengas API key cargada, la validacion real del LLM va en la opcion 3.
 2. Simular flujo completo de parcheo:
    - ticket recibido
    - Claude propone accion de parcheo
