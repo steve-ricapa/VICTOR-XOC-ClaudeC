@@ -1,0 +1,9 @@
+client_id: "example-client"
+deny_by_default: true
+allowed_tools:
+  - "openvas.scan"
+  - "siem.search"
+  - "insightvm.asset_lookup"
+notes:
+  - "Review allowlist at least monthly"
+  - "Any new tool requires security approval"

@@ -1,0 +1,35 @@
+name: "example-incident-triage"
+version: "1"
+description: "Simple read-first triage flow"
+
+steps:
+  - id: "check-runtime-folder"
+    description: "Verify runtime artifacts path exists"
+    action:
+      type: "file"
+      parameters:
+        operation: "exists"
+        path: "runtime/artifacts"
+    on_failure: "stop"
+
+  - id: "collect-snapshot"
+    description: "Collect lightweight process snapshot"
+    action:
+      type: "shell"
+      parameters:
+        command:
+          - "python"
+          - "-c"
+          - "print('snapshot-ok')"
+    on_failure: "rollback"
+    rollback:
+      type: "file"
+      parameters:
+        operation: "exists"
+        path: "."
+
+rollback:
+  - type: "file"
+    parameters:
+      operation: "exists"
+      path: "."

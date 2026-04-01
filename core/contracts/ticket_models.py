@@ -1,0 +1,1 @@
+"""Ticket contract models."""

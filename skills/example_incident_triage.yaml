@@ -1,0 +1,27 @@
+name: "incident-triage-basic"
+version: 1
+owner: "platform-security"
+description: "Guia base de triage para tickets operativos"
+
+triggers:
+  - "servicio caido"
+  - "alto ratio de errores"
+  - "alerta de seguridad"
+
+recommended_actions:
+  - type: "file"
+    description: "Verificar si existe la carpeta de artefactos de runtime"
+    parameters:
+      operation: "exists"
+      path: "runtime/artifacts"
+  - type: "shell"
+    description: "Recolectar una captura rapida de procesos"
+    parameters:
+      command:
+        - "python"
+        - "-c"
+        - "print('captura-triage')"
+
+safety_notes:
+  - "Priorizar acciones de solo lectura en la fase inicial"
+  - "No ejecutar comandos destructivos durante el triage"

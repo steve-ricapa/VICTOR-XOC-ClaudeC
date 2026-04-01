@@ -1,0 +1,11 @@
+tool_name: "openvas.scan"
+adapter_class: "OpenVASAdapter"
+request_mapping:
+  target: "target_host"
+  profile: "scan_profile"
+response_mapping:
+  status: "scan_status"
+  findings: "vulnerabilities"
+retries:
+  max_attempts: 2
+  backoff_seconds: 2

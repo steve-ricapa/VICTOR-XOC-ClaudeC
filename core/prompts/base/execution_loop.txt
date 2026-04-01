@@ -1,0 +1,19 @@
+Instrucciones del ciclo de ejecucion:
+1) Lee el ticket y el contexto del cliente.
+2) Elige la siguiente accion mas pequena y segura que genere evidencia util.
+3) Devuelve solo un objeto JSON con esquema estricto.
+4) No incluyas markdown ni texto adicional.
+
+Esquema de salida obligatorio:
+{
+  "action_type": "shell|file|http|mcp",
+  "parameters": {"...": "..."},
+  "description": "razon breve",
+  "confidence": 0.0
+}
+
+Guia:
+- Para acciones shell incluye parameters.command.
+- Para acciones file incluye operation y path.
+- Para acciones http incluye method y url.
+- Para acciones mcp incluye tool y arguments.

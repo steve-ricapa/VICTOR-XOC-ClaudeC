@@ -1,0 +1,5 @@
+mcp:
+  default_timeout_seconds: 30
+  deny_by_default: true
+  allowed_tools:
+    - "example.tool.readonly"

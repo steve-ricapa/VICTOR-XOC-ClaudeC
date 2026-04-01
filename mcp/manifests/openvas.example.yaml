@@ -1,0 +1,11 @@
+tool_name: "openvas.scan"
+description: "Run vulnerability scan against approved targets"
+endpoint: "https://openvas.local/api"
+auth:
+  type: "api_key"
+  env_var: "OPENVAS_API_KEY"
+timeouts:
+  connect_seconds: 5
+  request_seconds: 30
+capability_hint:
+  minimum_level: "C2_CONTROLADO"

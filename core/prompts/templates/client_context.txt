@@ -1,0 +1,8 @@
+Contexto del Cliente
+-------------------
+client_id: {client_id}
+capability_level: {capability_level}
+environment: {environment}
+
+client_payload_json:
+{client_json}

@@ -1,0 +1,9 @@
+Contexto del Ticket
+------------------
+ticket_id: {ticket_id}
+title: {title}
+priority: {priority}
+status: {status}
+
+ticket_payload_json:
+{ticket_json}

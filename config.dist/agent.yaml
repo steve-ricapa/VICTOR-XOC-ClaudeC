@@ -1,0 +1,6 @@
+client_id: "example-client"
+environment: "on-prem"
+agent:
+  name: "victor-agent"
+  max_concurrent_runs: 1
+  checkpoint_interval_seconds: 15

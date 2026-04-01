@@ -1,0 +1,33 @@
+# Runtime and per-client local state
+config/*
+runtime/*
+
+# Keep only docs/templates when needed
+!config/README.md
+!config/secrets/README.md
+!runtime/README.md
+!runtime/runs/README.md
+!runtime/workspaces/README.md
+!runtime/checkpoints/README.md
+!runtime/audit/README.md
+!runtime/decisions/README.md
+!runtime/artifacts/README.md
+!runtime/locks/README.md
+
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local environment files
+.env
+.env.*

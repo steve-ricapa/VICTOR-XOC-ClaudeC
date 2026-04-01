@@ -1,0 +1,6 @@
+policy:
+  default_decision: "deny"
+  require_human_approval_for:
+    - "destructive.file"
+    - "privileged.shell"
+    - "external.http.write"

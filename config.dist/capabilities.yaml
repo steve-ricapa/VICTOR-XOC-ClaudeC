@@ -1,0 +1,9 @@
+capabilities:
+  basic:
+    - "read.file"
+    - "ticket.update"
+  elevated:
+    - "write.file"
+    - "http.get"
+  privileged:
+    - "shell.exec"
