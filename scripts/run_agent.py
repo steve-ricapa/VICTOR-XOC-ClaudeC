@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Any
+from urllib import error as url_error
+from urllib import request as url_request
 from uuid import uuid4
 
 import yaml
@@ -73,13 +75,25 @@ def _interactive_menu(args: argparse.Namespace, agent_config: dict[str, Any]) ->
         print("Menu VICTOR - XOC")
         print("1) Ejecutar agente con ticket demo")
         print("2) Simular flujo: ticket -> parcheo -> devolucion")
-        print("3) Ejecutar test de simulacion de parcheo")
+        print("3) Ejecutar tests (simulacion + prueba real LLM Claude)")
         print("4) Salir")
         choice = input("Selecciona una opcion [1-4]: ").strip()
 
         if choice == "1":
             ticket = _load_ticket(args, agent_config)
-            code = _run_loop(ticket=ticket, max_iterations=args.max_iterations, pretty=True)
+            adapter_override = None
+            if not _has_llm_credentials():
+                adapter_override = _build_local_demo_adapter()
+                print(
+                    "No se detectaron credenciales Claude. "
+                    "Se ejecuta un modo demo local determinista para evitar MAX_ITERATIONS."
+                )
+            code = _run_loop(
+                ticket=ticket,
+                max_iterations=args.max_iterations,
+                pretty=True,
+                claude_adapter_module=adapter_override,
+            )
             print(f"Resultado opcion 1: {'OK' if code == 0 else 'FALLO'}")
             print()
             continue
@@ -91,7 +105,7 @@ def _interactive_menu(args: argparse.Namespace, agent_config: dict[str, Any]) ->
             continue
 
         if choice == "3":
-            code = _run_demo_test(PROJECT_ROOT)
+            code = _run_menu_tests(PROJECT_ROOT, agent_config)
             print(f"Resultado opcion 3: {'OK' if code == 0 else 'FALLO'}")
             print()
             continue
@@ -103,8 +117,17 @@ def _interactive_menu(args: argparse.Namespace, agent_config: dict[str, Any]) ->
         print("Opcion invalida, intenta nuevamente.\n")
 
 
-def _run_loop(*, ticket: dict[str, Any], max_iterations: int, pretty: bool) -> int:
-    loop = VictorLoop(max_iterations=max(1, int(max_iterations)))
+def _run_loop(
+    *,
+    ticket: dict[str, Any],
+    max_iterations: int,
+    pretty: bool,
+    claude_adapter_module: Any | None = None,
+) -> int:
+    loop_kwargs: dict[str, Any] = {"max_iterations": max(1, int(max_iterations))}
+    if claude_adapter_module is not None:
+        loop_kwargs["claude_adapter_module"] = claude_adapter_module
+    loop = VictorLoop(**loop_kwargs)
     result = loop.run(ticket)
     _print_json(result, pretty=pretty)
 
@@ -138,6 +161,7 @@ def simulate_ticket_patch_flow(
         "title": "Parchear configuracion insegura",
         "status": "NEW",
         "priority": "HIGH",
+        "llm_model": "claude-sonnet-4-6",
         "client_context": {
             "client_id": "demo-client",
             "capability_level": "C2_CONTROLADO",
@@ -174,7 +198,14 @@ def simulate_ticket_patch_flow(
         "Ticket de ejemplo: aplicar parche de configuracion de modo legacy a modo seguro. "
         "Devuelve una sola accion estructurada."
     )
-    action = adapter.generate_action(prompt, {"run_id": run_id, "ticket_id": ticket_id})
+    action = adapter.generate_action(
+        prompt,
+        {
+            "run_id": run_id,
+            "ticket_id": ticket_id,
+            "model": str(ticket.get("llm_model")),
+        },
+    )
     action_payload = action.to_dict()
     _trace(
         trace,
@@ -289,6 +320,129 @@ def _run_demo_test(project_root: Path) -> int:
     return int(completed.returncode)
 
 
+def _run_menu_tests(project_root: Path, agent_config: dict[str, Any]) -> int:
+    demo_code = _run_demo_test(project_root)
+    llm_code = _run_live_llm_test(agent_config)
+
+    if demo_code == 0 and llm_code == 0:
+        return 0
+    return 1
+
+
+def _run_live_llm_test(agent_config: dict[str, Any]) -> int:
+    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
+    if not api_key:
+        print("Prueba LLM: FALLO (no se encontro ANTHROPIC_API_KEY o CLAUDE_API_KEY)")
+        return 1
+
+    llm = _extract_llm_settings(agent_config)
+    model = str(llm.get("model") or "claude-sonnet-4-6")
+
+    payload = {
+        "model": model,
+        "max_tokens": 32,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Responde exactamente con: OK_VICTOR_LLM",
+            }
+        ],
+    }
+
+    request = url_request.Request(
+        url="https://api.anthropic.com/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+
+    print(f"Prueba LLM: ejecutando llamada real a Claude con modelo '{model}'...")
+
+    try:
+        with url_request.urlopen(request, timeout=45) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            parsed = json.loads(body)
+    except url_error.HTTPError as exc:
+        error_body = ""
+        try:
+            error_body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            error_body = str(exc)
+        print(f"Prueba LLM: FALLO (HTTP {exc.code})")
+        if error_body:
+            print(error_body)
+        return 1
+    except Exception as exc:
+        print(f"Prueba LLM: FALLO ({exc})")
+        return 1
+
+    text = _extract_claude_text(parsed)
+    if not text:
+        print("Prueba LLM: FALLO (respuesta sin texto)")
+        return 1
+
+    print(f"Prueba LLM: respuesta = {text}")
+    if "OK_VICTOR_LLM" in text:
+        print("Prueba LLM: OK")
+        return 0
+
+    print("Prueba LLM: FALLO (respuesta no coincide)")
+    return 1
+
+
+def _extract_claude_text(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    if isinstance(content, list):
+        texts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                texts.append(block["text"])
+        if texts:
+            return "\n".join(texts).strip()
+
+    if isinstance(payload.get("output_text"), str):
+        return str(payload["output_text"]).strip()
+
+    if isinstance(payload.get("completion"), str):
+        return str(payload["completion"]).strip()
+
+    return ""
+
+
+def _has_llm_credentials() -> bool:
+    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"))
+
+
+def _build_local_demo_adapter() -> Any:
+    class _DemoAdapter:
+        def call_claude(self, prompt: Any = None, context: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+            return {"prompt": str(prompt or ""), "context": dict(context or {}), "kwargs": dict(kwargs)}
+
+        @staticmethod
+        def parse_response(response: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "action_id": f"demo-{uuid4()}",
+                "type": "file",
+                "parameters": {
+                    "operation": "exists",
+                    "path": ".",
+                },
+                "description": "Chequeo local determinista para demo sin credenciales",
+                "completed": True,
+                "metadata": {
+                    "demo_mode": True,
+                    "source": "interactive_menu",
+                },
+            }
+
+    return _DemoAdapter()
+
+
 def _trace(trace: list[dict[str, Any]], verbose: bool, phase: str, message: str, metadata: dict[str, Any]) -> None:
     event = {
         "phase": phase,
@@ -304,6 +458,8 @@ def _trace(trace: list[dict[str, Any]], verbose: bool, phase: str, message: str,
 
 
 def _load_ticket(args: argparse.Namespace, agent_config: dict[str, Any]) -> dict[str, Any]:
+    llm_settings = _extract_llm_settings(agent_config)
+
     if args.ticket_json:
         payload = json.loads(args.ticket_json)
         if not isinstance(payload, dict):
@@ -321,6 +477,8 @@ def _load_ticket(args: argparse.Namespace, agent_config: dict[str, Any]) -> dict
             "title": "Ejecucion de prueba",
             "priority": "MEDIUM",
             "status": "NEW",
+            "llm": llm_settings,
+            "llm_model": llm_settings.get("model"),
             "client_context": {
                 "client_id": str(agent_config.get("client_id") or "demo-client"),
                 "capability_level": "C1_RESTRINGIDO",
@@ -334,8 +492,28 @@ def _load_ticket(args: argparse.Namespace, agent_config: dict[str, Any]) -> dict
     if args.capability_level:
         client_context["capability_level"] = str(args.capability_level).upper()
     ticket["client_context"] = client_context
+
+    if "llm" not in ticket:
+        ticket["llm"] = llm_settings
+    if "llm_model" not in ticket and llm_settings.get("model") is not None:
+        ticket["llm_model"] = llm_settings.get("model")
+
     ticket.setdefault("ticket_id", "ticket-demo")
     return ticket
+
+
+def _extract_llm_settings(agent_config: dict[str, Any]) -> dict[str, Any]:
+    llm_raw = agent_config.get("llm")
+    if isinstance(llm_raw, dict):
+        settings = dict(llm_raw)
+    else:
+        settings = {}
+
+    settings.setdefault("provider", "anthropic")
+    settings.setdefault("model", "claude-sonnet-4-6")
+    settings.setdefault("temperature", 0.0)
+    settings.setdefault("max_tokens", 4000)
+    return settings
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

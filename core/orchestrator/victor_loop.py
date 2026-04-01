@@ -322,6 +322,7 @@ class VictorLoop:
         )
 
     def _call_claude(self, *, prompt: Any, ticket: Any, ctx: RunContext) -> Any:
+        model_name = self._resolve_llm_model(ticket)
         payload = {
             "prompt": prompt,
             "ticket_id": ctx.ticket_id,
@@ -331,6 +332,8 @@ class VictorLoop:
             "history": list(ctx.history),
             "ticket": ticket,
         }
+        if model_name:
+            payload["model"] = model_name
 
         return self._invoke_component(
             component=self.claude_adapter,
@@ -343,6 +346,25 @@ class VictorLoop:
             component_name="claude_adapter",
             required=True,
         )
+
+    def _resolve_llm_model(self, ticket: Any) -> str | None:
+        if isinstance(ticket, Mapping):
+            direct = ticket.get("llm_model") or ticket.get("model")
+            if direct:
+                return str(direct)
+
+            llm = ticket.get("llm")
+            if isinstance(llm, Mapping) and llm.get("model"):
+                return str(llm.get("model"))
+
+            client_context = ticket.get("client_context")
+            if isinstance(client_context, Mapping):
+                nested = client_context.get("llm_model") or client_context.get("model")
+                if nested:
+                    return str(nested)
+
+        model_attr = self._get_value(ticket, "llm_model", "model", default=None)
+        return str(model_attr) if model_attr is not None else None
 
     def _parse_action(self, *, response: Any, ctx: RunContext) -> Any:
         parsed = self._invoke_component(

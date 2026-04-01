@@ -15,7 +15,9 @@ Runtime seguro, on-premise y single-tenant para ejecutar tareas operativas con c
 1. Crear entorno Python e instalar dependencias:
    - `python -m venv .venv`
    - `.venv\Scripts\activate` (Windows)
-   - `pip install -e .`
+   - `pip install -r requirements.txt`
+   - Opcional (dev/tests): `pip install -r requirements-dev.txt`
+   - Opcional (editable): `pip install -e .`
 
 2. Configurar archivos locales (no versionados):
    - `config/agent.yaml`
@@ -29,12 +31,26 @@ Runtime seguro, on-premise y single-tenant para ejecutar tareas operativas con c
    - Variable recomendada: `ANTHROPIC_API_KEY=tu_key_real`
    - Alias opcional: `CLAUDE_API_KEY=tu_key_real`
 
-4. Ejecutar un ticket de prueba:
+4. Elegir modelo de Claude Code:
+   - Archivo: `config/agent.yaml`
+   - Seccion: `llm.model`
+   - Valor por defecto configurado: `claude-sonnet-4-6`
+
+   Ejemplo:
+   ```yaml
+   llm:
+     provider: "anthropic"
+     model: "claude-sonnet-4-6"
+     temperature: 0.0
+     max_tokens: 4000
+   ```
+
+5. Ejecutar un ticket de prueba:
    - `python scripts/run_agent.py` (abre menu interactivo)
    - `python scripts/run_agent.py --pretty` (ejecucion directa sin menu)
    - Opcional: `python scripts/run_agent.py --ticket-file ruta/al/ticket.json --pretty`
 
-5. Ver resultado y auditoria:
+6. Ver resultado y auditoria:
    - Salida del run en consola (JSON)
    - Eventos en `runtime/audit/events.jsonl`
 
@@ -74,12 +90,14 @@ Runtime seguro, on-premise y single-tenant para ejecutar tareas operativas con c
 Al arrancar `python scripts/run_agent.py` se muestra un menu con opciones:
 
 1. Ejecutar agente con ticket demo.
+   - Si no hay `ANTHROPIC_API_KEY` ni `CLAUDE_API_KEY`, usa un adaptador local determinista para completar la demo sin caer en `MAX_ITERATIONS`.
 2. Simular flujo completo de parcheo:
    - ticket recibido
    - Claude propone accion de parcheo
    - Action Gateway valida/ejecuta
    - se genera envio de devolucion del ticket parchado
 3. Ejecutar test de esa simulacion desde el menu.
+   - Incluye prueba real de conectividad LLM Claude con tu API key.
 
 Tambien puedes ejecutar opciones directas por bandera:
 

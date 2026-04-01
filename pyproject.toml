@@ -29,6 +29,12 @@ python_version = "3.11"
 strict = true
 exclude = ["runtime", "config"]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "playbooks*"]
+exclude = ["tests*", "config*", "runtime*", "skills*", "mcp*"]
+namespaces = false
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"

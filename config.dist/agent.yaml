@@ -4,3 +4,8 @@ agent:
   name: "victor-agent"
   max_concurrent_runs: 1
   checkpoint_interval_seconds: 15
+llm:
+  provider: "anthropic"
+  model: "claude-sonnet-4-6"
+  temperature: 0.0
+  max_tokens: 4000

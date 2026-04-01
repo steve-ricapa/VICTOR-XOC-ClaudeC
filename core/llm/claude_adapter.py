@@ -21,16 +21,20 @@ class _ParseResult:
 class ClaudeAdapter:
     """Safe adapter between VICTOR and Claude Code SDK."""
 
+    DEFAULT_MODEL = "claude-sonnet-4-6"
+
     def __init__(
         self,
         *,
         sdk_client: Any = None,
         audit_logger_module: Any = audit_logger,
         max_logged_text_chars: int = 4000,
+        default_model: str = DEFAULT_MODEL,
     ) -> None:
         self.sdk_client = sdk_client
         self.audit_logger = audit_logger_module
         self.max_logged_text_chars = max(256, int(max_logged_text_chars))
+        self.default_model = str(default_model or self.DEFAULT_MODEL)
         self._fallback_events: list[dict[str, Any]] = []
 
     def generate_action(self, prompt: str, context: Mapping[str, Any] | None = None) -> Action:
@@ -39,6 +43,7 @@ class ClaudeAdapter:
 
     def call_claude(self, prompt: str, context: Mapping[str, Any] | None = None) -> Any:
         normalized_context = self._normalize_context(context)
+        model_name = self._resolve_model(normalized_context)
         self._log_event(
             phase="PROMPT_SENT",
             message="Prompt sent to Claude adapter",
@@ -46,6 +51,7 @@ class ClaudeAdapter:
             metadata={
                 "run_id": normalized_context.get("run_id"),
                 "ticket_id": normalized_context.get("ticket_id"),
+                "model": model_name,
                 "prompt_preview": self._truncate(str(prompt)),
             },
         )
@@ -59,6 +65,7 @@ class ClaudeAdapter:
             metadata={
                 "run_id": normalized_context.get("run_id"),
                 "ticket_id": normalized_context.get("ticket_id"),
+                "model": model_name,
                 "response_preview": self._truncate(self._response_preview(raw_response)),
             },
         )
@@ -305,6 +312,8 @@ class ClaudeAdapter:
         if client is None:
             return self._safe_raw_fallback("SDK client unavailable")
 
+        model_name = self._resolve_model(context)
+
         method_names = (
             "generate_action",
             "generate",
@@ -319,9 +328,13 @@ class ClaudeAdapter:
             if not callable(method):
                 continue
             for args, kwargs in (
+                ((prompt, context), {"model": model_name}),
                 ((prompt, context), {}),
+                ((prompt,), {"context": context, "model": model_name}),
                 ((prompt,), {"context": context}),
+                ((), {"prompt": prompt, "context": context, "model": model_name}),
                 ((), {"prompt": prompt, "context": context}),
+                ((prompt,), {"model": model_name}),
                 ((prompt,), {}),
             ):
                 try:
@@ -333,8 +346,11 @@ class ClaudeAdapter:
 
         if callable(client):
             for args, kwargs in (
+                ((prompt, context), {"model": model_name}),
                 ((prompt, context), {}),
+                ((prompt,), {"context": context, "model": model_name}),
                 ((prompt,), {"context": context}),
+                ((prompt,), {"model": model_name}),
                 ((prompt,), {}),
             ):
                 try:
@@ -351,6 +367,28 @@ class ClaudeAdapter:
             if context.get(key) is not None:
                 return context[key]
         return self.sdk_client
+
+    def _resolve_model(self, context: Mapping[str, Any]) -> str:
+        llm = context.get("llm")
+        if isinstance(llm, Mapping):
+            model = llm.get("model")
+            if model:
+                return str(model)
+
+        for key in ("model", "llm_model"):
+            value = context.get(key)
+            if value:
+                return str(value)
+
+        ticket = context.get("ticket")
+        if isinstance(ticket, Mapping):
+            if ticket.get("llm_model"):
+                return str(ticket.get("llm_model"))
+            nested_llm = ticket.get("llm")
+            if isinstance(nested_llm, Mapping) and nested_llm.get("model"):
+                return str(nested_llm.get("model"))
+
+        return self.default_model
 
     def _safe_raw_fallback(self, reason: str) -> dict[str, Any]:
         return {
