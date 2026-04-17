@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import inspect
 import json
 import re
 from typing import Any, Mapping
@@ -19,7 +21,7 @@ class _ParseResult:
 
 
 class ClaudeAdapter:
-    """Safe adapter between VICTOR and Claude Code SDK."""
+    """Safe adapter between VICTOR and Claude Agent SDK."""
 
     DEFAULT_MODEL = "claude-sonnet-4-6"
 
@@ -105,27 +107,39 @@ class ClaudeAdapter:
     def extract_action(self, response: Any) -> Action:
         return self.parse_response(response)
 
-    def invoke(self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any) -> Any:
+    def invoke(
+        self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         effective_prompt, effective_context = self._resolve_call_inputs(prompt, context, kwargs)
         return self.call_claude(prompt=effective_prompt, context=effective_context)
 
-    def generate(self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any) -> Any:
+    def generate(
+        self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         return self.invoke(prompt=prompt, context=context, **kwargs)
 
-    def complete(self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any) -> Any:
+    def complete(
+        self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         return self.invoke(prompt=prompt, context=context, **kwargs)
 
-    def run(self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any) -> Any:
+    def run(
+        self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         return self.invoke(prompt=prompt, context=context, **kwargs)
 
-    def request(self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any) -> Any:
+    def request(
+        self, prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         return self.invoke(prompt=prompt, context=context, **kwargs)
 
     def _parse_response_internal(self, raw_response: Any) -> _ParseResult:
         payload, recovered_reason = self._extract_payload(raw_response)
         normalized_payload = self._normalize_payload(payload)
         action = self._build_action(normalized_payload)
-        return _ParseResult(action=action, recovered=bool(recovered_reason), reason=recovered_reason)
+        return _ParseResult(
+            action=action, recovered=bool(recovered_reason), reason=recovered_reason
+        )
 
     def _extract_payload(self, raw_response: Any) -> tuple[dict[str, Any], str]:
         if isinstance(raw_response, Action):
@@ -180,16 +194,23 @@ class ClaudeAdapter:
                 "description": payload.get("description"),
                 "risk_level": payload.get("risk_level"),
                 "confidence": payload.get("confidence"),
-                "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), Mapping) else {},
+                "metadata": payload.get("metadata")
+                if isinstance(payload.get("metadata"), Mapping)
+                else {},
             }
         )
 
     def _normalize_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         normalized: dict[str, Any] = dict(payload)
 
-        action_type = str(normalized.get("action_type") or normalized.get("type") or "").strip().lower()
+        action_type = (
+            str(normalized.get("action_type") or normalized.get("type") or "").strip().lower()
+        )
         if not action_type:
-            if "command" in normalized or (isinstance(normalized.get("parameters"), Mapping) and "command" in normalized["parameters"]):
+            if "command" in normalized or (
+                isinstance(normalized.get("parameters"), Mapping)
+                and "command" in normalized["parameters"]
+            ):
                 action_type = "shell"
             elif "url" in normalized:
                 action_type = "http"
@@ -253,7 +274,9 @@ class ClaudeAdapter:
             "description": description,
             "risk_level": normalized.get("risk_level"),
             "confidence": confidence,
-            "metadata": normalized.get("metadata") if isinstance(normalized.get("metadata"), Mapping) else {},
+            "metadata": normalized.get("metadata")
+            if isinstance(normalized.get("metadata"), Mapping)
+            else {},
         }
         return result
 
@@ -270,7 +293,9 @@ class ClaudeAdapter:
         if not cleaned:
             raise ValueError("Empty model response")
 
-        fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, flags=re.IGNORECASE | re.DOTALL)
+        fence_match = re.search(
+            r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, flags=re.IGNORECASE | re.DOTALL
+        )
         if fence_match:
             cleaned = fence_match.group(1).strip()
 
@@ -307,10 +332,149 @@ class ClaudeAdapter:
                     return "\n".join(parts)
         return ""
 
+    def _invoke_native_agent_sdk(self, *, prompt: str, context: Mapping[str, Any]) -> Any:
+        try:
+            from claude_agent_sdk import ClaudeAgentOptions, query
+        except Exception as exc:  # pragma: no cover - depends on optional runtime package
+            return self._safe_raw_fallback(f"sdk_import_error:{exc}")
+
+        options = self._build_agent_options(
+            claude_agent_options_type=ClaudeAgentOptions,
+            context=context,
+        )
+
+        async def _run_query() -> list[Any]:
+            messages: list[Any] = []
+            async for message in query(prompt=prompt, options=options):
+                messages.append(message)
+            return messages
+
+        try:
+            messages = self._run_coroutine_sync(_run_query())
+        except Exception as exc:  # pragma: no cover - network/process dependent
+            return self._safe_raw_fallback(f"sdk_runtime_error:{exc}")
+
+        return self._messages_to_payload(messages)
+
+    def _build_agent_options(
+        self, *, claude_agent_options_type: Any, context: Mapping[str, Any]
+    ) -> Any:
+        merged = self._collect_llm_settings(context)
+        supported = self._option_parameter_names(claude_agent_options_type)
+
+        full_payload: dict[str, Any] = {}
+        for key in ("model", "system_prompt", "setting_sources", "permission_mode"):
+            value = merged.get(key)
+            if value is not None:
+                full_payload[key] = value
+
+        sanitized_payload = {
+            k: v for k, v in full_payload.items() if not supported or k in supported
+        }
+
+        candidate_payloads = [
+            sanitized_payload,
+            {k: sanitized_payload[k] for k in ("model",) if k in sanitized_payload},
+            {},
+        ]
+
+        for payload in candidate_payloads:
+            try:
+                return claude_agent_options_type(**payload)
+            except TypeError:
+                continue
+
+        return claude_agent_options_type()
+
+    @staticmethod
+    def _option_parameter_names(option_type: Any) -> set[str]:
+        try:
+            return set(inspect.signature(option_type).parameters.keys())
+        except Exception:
+            return set()
+
+    @staticmethod
+    def _run_coroutine_sync(coro: Any) -> Any:
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop and running_loop.is_running():
+            raise RuntimeError("Cannot run Claude Agent SDK query inside an active event loop")
+
+        return asyncio.run(coro)
+
+    @staticmethod
+    def _collect_llm_settings(context: Mapping[str, Any]) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+
+        llm = context.get("llm")
+        if isinstance(llm, Mapping):
+            merged.update(dict(llm))
+
+        ticket = context.get("ticket")
+        if isinstance(ticket, Mapping):
+            nested_llm = ticket.get("llm")
+            if isinstance(nested_llm, Mapping):
+                for key, value in nested_llm.items():
+                    merged.setdefault(str(key), value)
+            ticket_model = ticket.get("llm_model")
+            if ticket_model and "model" not in merged:
+                merged["model"] = ticket_model
+
+        for key in (
+            "model",
+            "llm_model",
+            "max_tokens",
+            "system_prompt",
+            "setting_sources",
+            "permission_mode",
+        ):
+            if key in context and context.get(key) is not None:
+                if key == "llm_model":
+                    merged["model"] = context[key]
+                else:
+                    merged[key] = context[key]
+
+        return merged
+
+    def _messages_to_payload(self, messages: list[Any]) -> dict[str, Any]:
+        last_result_text = ""
+        assistant_text_chunks: list[str] = []
+
+        for message in messages:
+            structured = getattr(message, "structured_output", None)
+            if isinstance(structured, Mapping):
+                return dict(structured)
+
+            result_text = getattr(message, "result", None)
+            if isinstance(result_text, str) and result_text.strip():
+                last_result_text = result_text.strip()
+
+            content = getattr(message, "content", None)
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, Mapping):
+                        text = block.get("text")
+                    else:
+                        text = getattr(block, "text", None)
+                    if isinstance(text, str) and text.strip():
+                        assistant_text_chunks.append(text.strip())
+
+        preferred_text = last_result_text or "\n".join(assistant_text_chunks).strip()
+        if not preferred_text:
+            return self._safe_raw_fallback("sdk_empty_response")
+
+        try:
+            return self._parse_json_payload(preferred_text)
+        except Exception:
+            return {"output_text": preferred_text}
+
     def _invoke_sdk(self, *, prompt: str, context: Mapping[str, Any]) -> Any:
         client = self._resolve_client(context)
         if client is None:
-            return self._safe_raw_fallback("SDK client unavailable")
+            return self._invoke_native_agent_sdk(prompt=prompt, context=context)
 
         model_name = self._resolve_model(context)
 
@@ -510,7 +674,9 @@ def extract_action(response: Any) -> Action:
 
 
 def call_claude(prompt: Any = None, context: Mapping[str, Any] | None = None, **kwargs: Any) -> Any:
-    effective_prompt, effective_context = ClaudeAdapter._resolve_call_inputs(prompt, context, kwargs)
+    effective_prompt, effective_context = ClaudeAdapter._resolve_call_inputs(
+        prompt, context, kwargs
+    )
     return _DEFAULT_ADAPTER.call_claude(prompt=effective_prompt, context=effective_context)
 
 

@@ -10,7 +10,7 @@ Archivos esperados:
 
 Usa `config.dist/` como plantilla base.
 
-## Modelo de Claude Code
+## Modelo de Claude Agent
 
 Puedes cambiar el modelo que usa el runtime en:
 

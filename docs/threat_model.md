@@ -3,7 +3,7 @@
 ## Trust Boundaries
 
 - Ticket backend input.
-- Claude Code SDK output.
+- Claude Agent SDK output.
 - Local OS command/file/network execution.
 - External MCP tools.
 - Human approval channel.

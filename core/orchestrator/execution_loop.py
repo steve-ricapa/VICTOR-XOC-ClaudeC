@@ -1,1 +1,1 @@
-"""Main Claude Code SDK-driven execution loop."""
+"""Main Claude Agent SDK-driven execution loop."""

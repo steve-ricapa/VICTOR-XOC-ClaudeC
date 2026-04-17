@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from typing import Any
-from urllib import error as url_error
-from urllib import request as url_request
 from uuid import uuid4
 
 import yaml
@@ -35,13 +34,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Arranca una ejecucion del agente VICTOR")
     parser.add_argument("--ticket-file", type=str, default=None, help="Ruta a ticket JSON")
     parser.add_argument("--ticket-json", type=str, default=None, help="Ticket JSON inline")
-    parser.add_argument("--capability-level", type=str, default=None, help="Nivel de capacidad (C1/C2/C3)")
-    parser.add_argument("--max-iterations", type=int, default=10, help="Maximo de iteraciones del loop")
+    parser.add_argument(
+        "--capability-level", type=str, default=None, help="Nivel de capacidad (C1/C2/C3)"
+    )
+    parser.add_argument(
+        "--max-iterations", type=int, default=10, help="Maximo de iteraciones del loop"
+    )
     parser.add_argument("--pretty", action="store_true", help="Imprime salida JSON formateada")
     parser.add_argument("--menu", action="store_true", help="Abre un menu interactivo de pruebas")
     parser.add_argument("--no-menu", action="store_true", help="Desactiva menu automatico")
-    parser.add_argument("--demo-patch-flow", action="store_true", help="Ejecuta demo guiada de parcheo")
-    parser.add_argument("--run-demo-test", action="store_true", help="Ejecuta test de demo desde consola")
+    parser.add_argument(
+        "--demo-patch-flow", action="store_true", help="Ejecuta demo guiada de parcheo"
+    )
+    parser.add_argument(
+        "--run-demo-test", action="store_true", help="Ejecuta test de demo desde consola"
+    )
     args = parser.parse_args()
 
     _load_dotenv(PROJECT_ROOT / "config" / "secrets" / ".env")
@@ -206,7 +213,7 @@ def simulate_ticket_patch_flow(
         trace,
         verbose,
         "PLAN",
-        "Claude Code propone accion de parcheo",
+        "Claude Agent propone accion de parcheo",
         {"action_id": action_payload.get("action_id"), "action_type": action_payload.get("type")},
     )
 
@@ -288,7 +295,9 @@ def simulate_ticket_patch_flow(
 
 def _dispatch_ticket_response(payload: dict[str, Any], output_file: Path) -> dict[str, Any]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    output_file.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     return {
         "status": "SENT",
         "output_file": str(output_file),
@@ -325,58 +334,46 @@ def _run_menu_tests(project_root: Path, agent_config: dict[str, Any]) -> int:
 
 
 def _run_live_llm_test(agent_config: dict[str, Any]) -> int:
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
-    if not api_key:
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")):
         print("Prueba LLM: FALLO (no se encontro ANTHROPIC_API_KEY o CLAUDE_API_KEY)")
+        return 1
+
+    try:
+        from claude_agent_sdk import ClaudeAgentOptions, query
+    except Exception as exc:
+        print(f"Prueba LLM: FALLO (Claude Agent SDK no disponible: {exc})")
         return 1
 
     llm = _extract_llm_settings(agent_config)
     model = str(llm.get("model") or "claude-sonnet-4-6")
 
-    payload = {
-        "model": model,
-        "max_tokens": 32,
-        "temperature": 0,
-        "messages": [
-            {
-                "role": "user",
-                "content": "Responde exactamente con: OK_VICTOR_LLM",
-            }
-        ],
-    }
+    options_payload: dict[str, Any] = {"model": model}
+    for key in ("system_prompt", "setting_sources", "permission_mode"):
+        value = llm.get(key)
+        if value is not None:
+            options_payload[key] = value
 
-    request = url_request.Request(
-        url="https://api.anthropic.com/v1/messages",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "content-type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
-        method="POST",
-    )
+    try:
+        options = ClaudeAgentOptions(**options_payload)
+    except TypeError:
+        options = ClaudeAgentOptions(model=model)
+
+    async def _probe() -> str:
+        messages: list[Any] = []
+        async for message in query(
+            prompt="Responde exactamente con: OK_VICTOR_LLM", options=options
+        ):
+            messages.append(message)
+        return _extract_agent_sdk_text(messages)
 
     print(f"Prueba LLM: ejecutando llamada real a Claude con modelo '{model}'...")
 
     try:
-        with url_request.urlopen(request, timeout=45) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            parsed = json.loads(body)
-    except url_error.HTTPError as exc:
-        error_body = ""
-        try:
-            error_body = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            error_body = str(exc)
-        print(f"Prueba LLM: FALLO (HTTP {exc.code})")
-        if error_body:
-            print(error_body)
-        return 1
+        text = asyncio.run(_probe())
     except Exception as exc:
         print(f"Prueba LLM: FALLO ({exc})")
         return 1
 
-    text = _extract_claude_text(parsed)
     if not text:
         print("Prueba LLM: FALLO (respuesta sin texto)")
         return 1
@@ -390,23 +387,28 @@ def _run_live_llm_test(agent_config: dict[str, Any]) -> int:
     return 1
 
 
-def _extract_claude_text(payload: dict[str, Any]) -> str:
-    content = payload.get("content")
-    if isinstance(content, list):
-        texts: list[str] = []
+def _extract_agent_sdk_text(messages: list[Any]) -> str:
+    last_result = ""
+    chunks: list[str] = []
+
+    for message in messages:
+        result = getattr(message, "result", None)
+        if isinstance(result, str) and result.strip():
+            last_result = result.strip()
+
+        content = getattr(message, "content", None)
+        if not isinstance(content, list):
+            continue
+
         for block in content:
-            if isinstance(block, dict) and isinstance(block.get("text"), str):
-                texts.append(block["text"])
-        if texts:
-            return "\n".join(texts).strip()
+            if isinstance(block, dict):
+                text = block.get("text")
+            else:
+                text = getattr(block, "text", None)
+            if isinstance(text, str) and text.strip():
+                chunks.append(text.strip())
 
-    if isinstance(payload.get("output_text"), str):
-        return str(payload["output_text"]).strip()
-
-    if isinstance(payload.get("completion"), str):
-        return str(payload["completion"]).strip()
-
-    return ""
+    return last_result or "\n".join(chunks).strip()
 
 
 def _has_llm_credentials() -> bool:
@@ -429,8 +431,14 @@ def _resolve_option1_adapter() -> tuple[Any, str]:
 
 def _build_local_demo_adapter() -> Any:
     class _DemoAdapter:
-        def call_claude(self, prompt: Any = None, context: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
-            return {"prompt": str(prompt or ""), "context": dict(context or {}), "kwargs": dict(kwargs)}
+        def call_claude(
+            self, prompt: Any = None, context: dict[str, Any] | None = None, **kwargs: Any
+        ) -> dict[str, Any]:
+            return {
+                "prompt": str(prompt or ""),
+                "context": dict(context or {}),
+                "kwargs": dict(kwargs),
+            }
 
         @staticmethod
         def parse_response(response: dict[str, Any]) -> dict[str, Any]:
@@ -452,7 +460,9 @@ def _build_local_demo_adapter() -> Any:
     return _DemoAdapter()
 
 
-def _trace(trace: list[dict[str, Any]], verbose: bool, phase: str, message: str, metadata: dict[str, Any]) -> None:
+def _trace(
+    trace: list[dict[str, Any]], verbose: bool, phase: str, message: str, metadata: dict[str, Any]
+) -> None:
     event = {
         "phase": phase,
         "message": message,

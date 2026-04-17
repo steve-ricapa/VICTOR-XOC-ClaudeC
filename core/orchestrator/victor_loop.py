@@ -6,10 +6,7 @@ from enum import Enum
 from typing import Any, Mapping
 from uuid import uuid4
 
-try:
-    from core.llm import claude_adapter
-except ImportError:
-    from core.llm import claude_code_adapter as claude_adapter  # type: ignore[no-redef]
+from core.llm import claude_adapter
 
 from core.actions import action_gateway
 from core.decisions import decision_engine
@@ -120,7 +117,9 @@ class VictorLoop:
         self._local_audit_events = []
 
         ctx = self._initialize_run_context(ticket)
-        self._set_execution_status(ctx, ExecutionStatus.RUNNING, ticket=ticket, ticket_status="RUNNING")
+        self._set_execution_status(
+            ctx, ExecutionStatus.RUNNING, ticket=ticket, ticket_status="RUNNING"
+        )
         self._audit(
             ctx,
             Phase.PLAN,
@@ -147,7 +146,9 @@ class VictorLoop:
                 if status == GatewayStatus.EXECUTED.value:
                     self._handle_executed(ctx=ctx, action=action, gateway_result=gateway_result)
                     if self._is_completion_signal(action=action, gateway_result=gateway_result):
-                        return self._complete_run(ctx=ctx, ticket=ticket, gateway_result=gateway_result)
+                        return self._complete_run(
+                            ctx=ctx, ticket=ticket, gateway_result=gateway_result
+                        )
                     continue
 
                 if status == GatewayStatus.BLOCKED.value:
@@ -496,7 +497,9 @@ class VictorLoop:
             "raw": dict(raw),
         }
 
-    def _handle_executed(self, *, ctx: RunContext, action: Any, gateway_result: Mapping[str, Any]) -> None:
+    def _handle_executed(
+        self, *, ctx: RunContext, action: Any, gateway_result: Mapping[str, Any]
+    ) -> None:
         exec_result = gateway_result.get("result")
         ctx.history.append(
             {
@@ -530,8 +533,14 @@ class VictorLoop:
         action: Any,
         gateway_result: Mapping[str, Any],
     ) -> dict[str, Any]:
-        reason = str(gateway_result.get("message") or gateway_result.get("error") or "Action blocked by policy")
-        self._set_execution_status(ctx, ExecutionStatus.BLOCKED, ticket=ticket, ticket_status="BLOCKED")
+        reason = str(
+            gateway_result.get("message")
+            or gateway_result.get("error")
+            or "Action blocked by policy"
+        )
+        self._set_execution_status(
+            ctx, ExecutionStatus.BLOCKED, ticket=ticket, ticket_status="BLOCKED"
+        )
 
         failure_response = self._build_failure_response(
             ctx=ctx,
@@ -572,9 +581,11 @@ class VictorLoop:
                 reason=str(gateway_result.get("message") or "Human decision required"),
             )
 
-        ctx.pending_decision = dict(pending_decision) if isinstance(pending_decision, Mapping) else {
-            "value": pending_decision
-        }
+        ctx.pending_decision = (
+            dict(pending_decision)
+            if isinstance(pending_decision, Mapping)
+            else {"value": pending_decision}
+        )
 
         self._set_execution_status(
             ctx,
@@ -689,7 +700,9 @@ class VictorLoop:
         action: Any,
         details: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        self._set_execution_status(ctx, ExecutionStatus.FAILED, ticket=ticket, ticket_status="FAILED")
+        self._set_execution_status(
+            ctx, ExecutionStatus.FAILED, ticket=ticket, ticket_status="FAILED"
+        )
         failure_response = self._build_failure_response(
             ctx=ctx,
             error_type=error_type,
@@ -713,7 +726,9 @@ class VictorLoop:
             "failure_response": failure_response,
         }
 
-    def _request_human_decision(self, *, ctx: RunContext, action: Any, reason: str) -> dict[str, Any]:
+    def _request_human_decision(
+        self, *, ctx: RunContext, action: Any, reason: str
+    ) -> dict[str, Any]:
         payload = {
             "ticket_id": ctx.ticket_id,
             "run_id": ctx.run_id,
@@ -804,9 +819,21 @@ class VictorLoop:
                     "update_status",
                 ),
                 attempts=[
-                    ((), {"ticket_id": ctx.ticket_id, "status": ticket_status, "run_id": ctx.run_id}),
+                    (
+                        (),
+                        {"ticket_id": ctx.ticket_id, "status": ticket_status, "run_id": ctx.run_id},
+                    ),
                     ((ctx.ticket_id, ticket_status), {}),
-                    (({"ticket_id": ctx.ticket_id, "status": ticket_status, "run_id": ctx.run_id},), {}),
+                    (
+                        (
+                            {
+                                "ticket_id": ctx.ticket_id,
+                                "status": ticket_status,
+                                "run_id": ctx.run_id,
+                            },
+                        ),
+                        {},
+                    ),
                 ],
                 component_name="state_manager",
                 required=False,
@@ -955,7 +982,9 @@ class VictorLoop:
             return True
 
         if isinstance(action, Mapping):
-            action_type = str(action.get("type") or action.get("action") or action.get("name") or "").upper()
+            action_type = str(
+                action.get("type") or action.get("action") or action.get("name") or ""
+            ).upper()
             if action_type in {"COMPLETE", "COMPLETED", "DONE", "FINALIZE", "RESOLVE", "RESUELTO"}:
                 return True
             if bool(action.get("completed")):

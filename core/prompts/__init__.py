@@ -1,1 +1,1 @@
-"""Prompt assets and builders for Claude Code SDK interactions."""
+"""Prompt assets and builders for Claude Agent SDK interactions."""

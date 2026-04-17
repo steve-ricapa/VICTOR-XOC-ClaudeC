@@ -5,7 +5,7 @@ Runtime seguro, on-premise y single-tenant para ejecutar tareas operativas con c
 ## Objetivo del sistema
 
 - Procesar tickets operativos.
-- Proponer acciones con Claude Code SDK.
+- Proponer acciones con Claude Agent SDK.
 - Validar siempre por politica antes de ejecutar.
 - Ejecutar con aislamiento y auditoria estructurada.
 - Pausar para aprobacion humana cuando aplica.
@@ -31,7 +31,7 @@ Runtime seguro, on-premise y single-tenant para ejecutar tareas operativas con c
    - Variable recomendada: `ANTHROPIC_API_KEY=tu_key_real`
    - Alias opcional: `CLAUDE_API_KEY=tu_key_real`
 
-4. Elegir modelo de Claude Code:
+4. Elegir modelo de Claude Agent:
    - Archivo: `config/agent.yaml`
    - Seccion: `llm.model`
    - Valor por defecto configurado: `claude-sonnet-4-6`

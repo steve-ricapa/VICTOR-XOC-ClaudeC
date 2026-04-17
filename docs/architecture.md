@@ -6,7 +6,7 @@ VICTOR is a secure execution runtime, not a chatbot or web application.
 
 1. Fetch ticket from backend with lease.
 2. Build bounded execution plan.
-3. Ask Claude Code SDK for next action proposal.
+3. Ask Claude Agent SDK for next action proposal.
 4. Route action through policy gate.
 5. Execute via selected executor in sandbox.
 6. Emit structured audit events.

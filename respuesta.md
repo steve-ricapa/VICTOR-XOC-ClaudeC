@@ -10,7 +10,7 @@ Contexto: ya se ejecuto una fase de scaffolding estructural (sin implementar log
 
 ### Objetivo cumplido
 
-Se construyo una base de proyecto para un runtime de agente seguro (no chatbot, no web app) que usa Claude Code SDK como motor de ejecucion, con enforcement de policy, integracion MCP, aislamiento por cliente y logging auditable.
+Se construyo una base de proyecto para un runtime de agente seguro (no chatbot, no web app) que usa Claude Agent SDK como motor de ejecucion, con enforcement de policy, integracion MCP, aislamiento por cliente y logging auditable.
 
 ### Acciones ejecutadas para armar el proyecto
 
@@ -28,7 +28,7 @@ Se construyo una base de proyecto para un runtime de agente seguro (no chatbot, 
 
 3. Se definio el nucleo por dominios en `core/` (solo stubs de modulos):
    - `orchestrator/`: loop, FSM, contexto de sesion, pause/resume
-   - `llm/`: adapter Claude Code SDK, parser, prompt compiler
+   - `llm/`: adapter Claude Agent SDK, parser, prompt compiler
    - `actions/`: `action_gateway` obligatorio, router, registry, models
    - `policy/`: engine, capability matrix, decision artifacts, validators, hooks
    - `execution/`: service, registry, sandbox guards y executors (`shell`, `file`, `http`, `mcp`)
