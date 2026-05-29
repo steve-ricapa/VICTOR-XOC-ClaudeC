@@ -1,0 +1,38 @@
+name: "human-escalation"
+version: 1
+owner: "platform-security"
+description: "Guia para decidir cuando pausar, escalar o cerrar un ticket con apoyo humano"
+
+triggers:
+  - "requires decision"
+  - "aprobacion humana"
+  - "escalar al equipo"
+  - "bloqueado por politica"
+
+recommended_actions:
+  - type: "file"
+    description: "Verificar si existe carpeta local para adjuntar evidencia antes de escalar"
+    parameters:
+      operation: "exists"
+      path: "runtime/artifacts"
+
+  - type: "file"
+    description: "Leer evidencia previa para resumir contexto antes de la escalacion"
+    parameters:
+      operation: "list"
+      path: "runtime/artifacts"
+
+safety_notes:
+  - "No ejecutar acciones adicionales si ya existe una decision pendiente sin resolver"
+  - "Si la politica recomienda pausa o bloqueo, respetar ese estado y documentarlo"
+  - "La escalacion debe incluir accion propuesta, riesgo y evidencia generada"
+
+verification_expectations:
+  - "Construir un resumen claro del ticket, la accion intentada y el motivo de aprobacion o bloqueo"
+  - "Indicar si la recomendacion es Approve, Deny o Pause"
+  - "Dejar trazabilidad para web, app movil o equipo SOC"
+
+escalation_criteria:
+  - "Existe pending_decision y el run no puede continuar solo"
+  - "La accion final afecta estado externo del ticket o sistemas fuera del runtime local"
+  - "El riesgo operativo es alto o la politica lo marca como requiere decision"

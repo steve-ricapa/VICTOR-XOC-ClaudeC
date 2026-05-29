@@ -1,0 +1,45 @@
+name: "secure-file-remediation"
+version: 1
+owner: "platform-security"
+description: "Guia para remediaciones locales basadas en archivos o configuraciones de bajo riesgo"
+
+triggers:
+  - "cambiar configuracion"
+  - "parchear archivo"
+  - "valor inseguro en archivo"
+  - "remediacion local controlada"
+
+recommended_actions:
+  - type: "file"
+    description: "Comprobar que el archivo objetivo existe antes de modificarlo"
+    parameters:
+      operation: "exists"
+      path: "runtime/artifacts"
+
+  - type: "file"
+    description: "Leer el contenido actual antes de proponer una mutacion"
+    parameters:
+      operation: "read"
+      path: "runtime/artifacts"
+
+  - type: "file"
+    description: "Escribir solo cuando el cambio este acotado y el objetivo sea explicito"
+    parameters:
+      operation: "write"
+      path: "runtime/artifacts/remediacion_demo.txt"
+      content: "contenido-ejemplo"
+
+safety_notes:
+  - "Primero verificar existencia y estado actual del archivo"
+  - "Hacer el cambio minimo necesario y evitar mutaciones no relacionadas"
+  - "Si no se puede verificar el antes y el despues, no cerrar el ticket automaticamente"
+
+verification_expectations:
+  - "Registrar evidencia antes de la mutacion"
+  - "Verificar el contenido despues de escribir"
+  - "Dejar lista una resolucion breve con artefacto, cambio realizado y resultado de verificacion"
+
+escalation_criteria:
+  - "El archivo no existe o el valor esperado no esta presente"
+  - "La remediacion requiere borrar, renombrar o cambiar permisos sensibles"
+  - "La politica exige aprobacion adicional para continuar"

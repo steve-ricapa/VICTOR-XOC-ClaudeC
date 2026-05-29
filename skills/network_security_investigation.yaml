@@ -1,0 +1,47 @@
+name: "network-security-investigation"
+version: 1
+owner: "platform-security"
+description: "Guia para investigaciones de conectividad o egreso de red bajo politica controlada"
+
+triggers:
+  - "conectividad"
+  - "egreso de red"
+  - "host externo"
+  - "consulta http"
+  - "validar acceso a red"
+
+recommended_actions:
+  - type: "file"
+    description: "Registrar primero evidencia local antes de intentar acciones de red"
+    parameters:
+      operation: "exists"
+      path: "runtime/artifacts"
+
+  - type: "http"
+    description: "Ejemplo de consulta minima de solo lectura para validacion de conectividad"
+    parameters:
+      method: "GET"
+      url: "https://localhost"
+
+  - type: "shell"
+    description: "Usar comandos de diagnostico solo cuando la politica y el nivel de capacidad lo permitan"
+    parameters:
+      command: "ping 127.0.0.1"
+
+safety_notes:
+  - "No considerar salida a internet como comportamiento beneficioso por defecto en este entorno"
+  - "Evitar scanning agresivo, enumeracion amplia o comandos de red no justificados"
+  - "En C2, cualquier host externo debe tratarse como candidato a aprobacion humana"
+  - "Preferir validaciones locales, loopback, hosts internos allowlisted o evidencia ya disponible antes de proponer egreso externo"
+  - "Preferir acciones de solo lectura y evidencia minimizada"
+
+verification_expectations:
+  - "Explicar claramente destino, metodo y objetivo de la accion de red"
+  - "Adjuntar evidencia del resultado o del bloqueo por politica"
+  - "Diferenciar diagnostico de remediacion para no mezclar objetivos"
+
+escalation_criteria:
+  - "El ticket no justifica de forma explicita por que necesita salir a internet o consultar un host externo"
+  - "El destino externo no esta allowlisted"
+  - "La accion propuesta puede generar egreso fuera de la politica definida"
+  - "La investigacion requiere privilegios o herramientas no permitidas"

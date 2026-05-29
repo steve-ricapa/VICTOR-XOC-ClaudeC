@@ -53,3 +53,28 @@ Notas de formato:
 - `name` puede mantenerse en ingles si lo prefieres.
 - `description`, `triggers`, `recommended_actions` y `safety_notes` deben ir en espanol.
 - Cada accion en `recommended_actions` debe seguir el contrato de acciones (`type` + `parameters`).
+
+## Como se usan en el runtime
+
+El `prompt_builder` incorpora una seccion `SKILLS_APLICABLES` dentro del prompt del agente.
+
+Seleccion actual:
+- Si el ticket incluye `skills` o `requested_skills`, esas skills se cargan de forma explicita.
+- Si no las incluye, el sistema intenta seleccionar skills por coincidencia de `triggers` contra el contenido del ticket.
+- Como refuerzo, tambien existen heuristicas por dominio para red, remediacion de archivos, vulnerabilidades y escalacion humana.
+
+Ejemplos de uso desde ticket:
+
+```json
+{
+  "ticket_id": "ticket-demo",
+  "skills": [
+    "secure-file-remediation",
+    "human-escalation"
+  ]
+}
+```
+
+Recomendacion:
+- Para integracion con backend o Sophia, conviene que el sistema emisor pueda enviar `skills` explicitas cuando ya conoce el tipo de ticket.
+- Si no se envian skills explicitas, el matching automatico ayuda como fallback.

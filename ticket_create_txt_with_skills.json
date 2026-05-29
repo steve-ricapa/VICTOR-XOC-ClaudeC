@@ -1,0 +1,37 @@
+{
+  "ticket_id": "ticket-create-txt-skills-001",
+  "title": "Crear archivo de evidencia local con skills explicitas",
+  "priority": "LOW",
+  "status": "NEW",
+  "llm_model": "claude-sonnet-4-6",
+  "skills": [
+    "secure-file-remediation",
+    "human-escalation",
+    "vulnerability-triage"
+  ],
+  "client_context": {
+    "client_id": "sophia-demo",
+    "capability_level": "C2_CONTROLADO",
+    "environment": "on-prem"
+  },
+  "incident": {
+    "source": "Sophia",
+    "incident_id": "INC-DEMO-004",
+    "vulnerability_id": "VULN-DEMO-TXT-SKILLS",
+    "severity": "LOW",
+    "summary": "Prueba controlada de remediacion local usando skills explicitas"
+  },
+  "task": {
+    "objective": "Crear un archivo de evidencia local para validar el flujo del agente con skills explicitas",
+    "instructions": [
+      "Crea el archivo runtime/artifacts/prueba_victor_skills.txt",
+      "El contenido exacto debe ser VICTOR SKILLS OK",
+      "Antes de modificar, verifica el estado actual de forma segura",
+      "Haz el cambio minimo necesario",
+      "Despues del cambio, verifica el contenido",
+      "Si todo esta correcto, prepara el cierre del ticket con evidencia"
+    ],
+    "expected_artifact": "runtime/artifacts/prueba_victor_skills.txt",
+    "expected_content": "VICTOR SKILLS OK"
+  }
+}

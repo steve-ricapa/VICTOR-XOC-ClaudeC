@@ -1,0 +1,31 @@
+{
+  "ticket_id": "ticket-create-txt-001",
+  "title": "Crear archivo de evidencia local",
+  "priority": "LOW",
+  "status": "NEW",
+  "llm_model": "claude-sonnet-4-6",
+  "client_context": {
+    "client_id": "sophia-demo",
+    "capability_level": "C2_CONTROLADO",
+    "environment": "on-prem"
+  },
+  "incident": {
+    "source": "Sophia",
+    "incident_id": "INC-DEMO-001",
+    "vulnerability_id": "VULN-DEMO-TXT",
+    "severity": "LOW",
+    "summary": "Prueba controlada de remediacion local"
+  },
+  "task": {
+    "objective": "Crear un archivo de evidencia local para validar el flujo real del agente",
+    "instructions": [
+      "Crea el archivo runtime/artifacts/prueba_victor.txt",
+      "El contenido exacto debe ser VICTOR OK",
+      "Si el archivo ya existe, puedes sobrescribirlo",
+      "Elige la accion minima y segura",
+      "Cuando termines, marca el trabajo como completado"
+    ],
+    "expected_artifact": "runtime/artifacts/prueba_victor.txt",
+    "expected_content": "VICTOR OK"
+  }
+}

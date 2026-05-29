@@ -5,10 +5,14 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import yaml
+
 
 PROMPTS_ROOT = Path(__file__).resolve().parent.parent
 BASE_PROMPTS_DIR = PROMPTS_ROOT / "base"
 TEMPLATES_DIR = PROMPTS_ROOT / "templates"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+SKILLS_DIR = PROJECT_ROOT / "skills"
 
 
 class _SafeFormatDict(dict[str, Any]):
@@ -47,6 +51,207 @@ def _normalize_mapping(value: Any) -> dict[str, Any]:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, sort_keys=True, indent=2, default=str)
+
+
+@lru_cache(maxsize=1)
+def load_skills_catalog() -> list[dict[str, Any]]:
+    skills: list[dict[str, Any]] = []
+    if not SKILLS_DIR.exists():
+        return skills
+
+    for path in sorted(SKILLS_DIR.glob("*.yaml")):
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(loaded, Mapping):
+            continue
+        skill = dict(loaded)
+        skill["_path"] = str(path.relative_to(PROJECT_ROOT))
+        skills.append(skill)
+    return skills
+
+
+def get_skills_catalog(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+    return [dict(skill) for skill in load_skills_catalog()]
+
+
+def _stringify_ticket_for_matching(ticket: Mapping[str, Any]) -> str:
+    return _json(ticket).lower()
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _trigger_matches_haystack(trigger: str, haystack: str) -> bool:
+    normalized_trigger = trigger.strip().lower()
+    if not normalized_trigger:
+        return False
+    if normalized_trigger in haystack:
+        return True
+
+    words = [word for word in normalized_trigger.replace("-", " ").split() if len(word) >= 4]
+    if not words:
+        return False
+
+    matched_words = sum(1 for word in words if word in haystack)
+    if len(words) == 1:
+        return matched_words == 1
+    return matched_words >= min(2, len(words))
+
+
+def _skill_matches_domain(skill: Mapping[str, Any], haystack: str) -> bool:
+    skill_name = str(skill.get("name") or "").lower()
+    domain_keywords: dict[str, tuple[str, ...]] = {
+        "network-security-investigation": (
+            "http",
+            "https",
+            "conectividad",
+            "red",
+            "host externo",
+            "internet",
+            "egreso",
+            "url",
+        ),
+        "secure-file-remediation": (
+            "archivo",
+            "contenido",
+            "configuracion",
+            "path",
+            "ruta",
+            "parche",
+            "write",
+            "sobrescribir",
+        ),
+        "vulnerability-triage": (
+            "vulnerabilidad",
+            "cve",
+            "hallazgo",
+            "severidad",
+            "incidente",
+            "evidencia",
+        ),
+        "human-escalation": (
+            "aprobacion",
+            "approve",
+            "deny",
+            "pause",
+            "escalar",
+            "revision humana",
+            "pending_decision",
+        ),
+    }
+
+    for domain_name, keywords in domain_keywords.items():
+        if skill_name != domain_name:
+            continue
+        return any(keyword in haystack for keyword in keywords)
+    return False
+
+
+def _select_skills(ticket: Mapping[str, Any]) -> list[dict[str, Any]]:
+    catalog = load_skills_catalog()
+    if not catalog:
+        return []
+
+    requested_raw = ticket.get("skills") or ticket.get("requested_skills")
+    requested = {item.lower() for item in _normalize_string_list(requested_raw)}
+    selected: list[dict[str, Any]] = []
+
+    if requested:
+        for skill in catalog:
+            identifiers = {
+                str(skill.get("name") or "").lower(),
+                str(skill.get("_path") or "").lower(),
+                Path(str(skill.get("_path") or "")).stem.lower(),
+            }
+            if requested & identifiers:
+                selected.append(skill)
+        return selected
+
+    haystack = _stringify_ticket_for_matching(ticket)
+    for skill in catalog:
+        triggers = [trigger.lower() for trigger in _normalize_string_list(skill.get("triggers"))]
+        if triggers and any(_trigger_matches_haystack(trigger, haystack) for trigger in triggers):
+            selected.append(skill)
+            continue
+        if _skill_matches_domain(skill, haystack):
+            selected.append(skill)
+
+    return selected
+
+
+def _render_skill(skill: Mapping[str, Any]) -> str:
+    lines = [
+        f"- name: {skill.get('name') or 'sin-nombre'}",
+        f"  description: {skill.get('description') or 'N/D'}",
+    ]
+
+    triggers = _normalize_string_list(skill.get("triggers"))
+    if triggers:
+        lines.append("  triggers:")
+        for trigger in triggers:
+            lines.append(f"    - {trigger}")
+
+    actions = skill.get("recommended_actions")
+    if isinstance(actions, list) and actions:
+        lines.append("  recommended_actions:")
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            lines.append(
+                f"    - type: {action.get('type') or action.get('action_type') or 'unknown'}"
+            )
+            lines.append(f"      description: {action.get('description') or 'N/D'}")
+            params = action.get("parameters") if isinstance(action.get("parameters"), Mapping) else {}
+            if params:
+                lines.append("      parameters:")
+                for key, value in dict(params).items():
+                    rendered = value if isinstance(value, str) else json.dumps(value, ensure_ascii=True)
+                    lines.append(f"        {key}: {rendered}")
+
+    for field_name in ("safety_notes", "verification_expectations", "escalation_criteria"):
+        items = _normalize_string_list(skill.get(field_name))
+        if not items:
+            continue
+        lines.append(f"  {field_name}:")
+        for item in items:
+            lines.append(f"    - {item}")
+
+    path_value = skill.get("_path")
+    if path_value:
+        lines.append(f"  source: {path_value}")
+
+    return "\n".join(lines)
+
+
+def _render_selected_skills(ticket: Mapping[str, Any]) -> str:
+    skills = _select_skills(ticket)
+    if not skills:
+        return "Sin skills aplicables detectadas para este ticket."
+    return "\n\n".join(_render_skill(skill) for skill in skills)
+
+
+def _render_completion_guidance(ticket: Mapping[str, Any]) -> str:
+    task = ticket.get("task")
+    if not isinstance(task, Mapping):
+        return "Si el ticket queda efectivamente resuelto, evita pasos extra de auditoria que no cambien la decision final."
+
+    artifact = task.get("expected_artifact")
+    content = task.get("expected_content")
+    criteria: list[str] = []
+
+    if artifact:
+        criteria.append(f"- Considera el objetivo principal cumplido cuando el artefacto `{artifact}` exista.")
+    if content:
+        criteria.append(f"- Si ademas verificas que el contenido esperado es `{content}`, da por completada la remediacion principal.")
+
+    criteria.append("- Despues de cumplir el objetivo principal y verificarlo, no sigas creando artefactos auxiliares ni verificaciones redundantes.")
+    criteria.append("- Si necesitas cerrar el ticket, la siguiente accion debe ser la minima accion final de cierre o escalacion, no una nueva cadena de auditoria local.")
+    return "\n".join(criteria)
 
 
 def _render_ticket_context(ticket: Mapping[str, Any]) -> str:
@@ -96,7 +301,7 @@ def _normalize_build_inputs(
         isinstance(ticket, Mapping)
         and client_context is None
         and run_context is None
-        and any(key in ticket for key in ("ticket_context", "client_context", "run_context", "base_prompts"))
+        and any(key in ticket for key in ("ticket_context", "run_context", "base_prompts", "history"))
     ):
         inferred_base = ticket.get("base_prompts")
         inferred_ticket_context = ticket.get("ticket_context")
@@ -154,6 +359,8 @@ def build_prompt(
         "[CICLO_EJECUCION]\n" + base["execution_loop"],
         "[CONTEXTO_TICKET]\n" + _render_ticket_context(ticket_map),
         "[CONTEXTO_CLIENTE]\n" + _render_client_context(client_map),
+        "[SKILLS_APLICABLES]\n" + _render_selected_skills(ticket_map),
+        "[CRITERIO_CIERRE]\n" + _render_completion_guidance(ticket_map),
         "[CONTEXTO_EJECUCION]\n" + _json(run_map),
         "[HISTORIAL]\n" + _json(history_list),
         (
@@ -183,6 +390,9 @@ class PromptBuilder:
 
     def get_base_prompts(self) -> dict[str, str]:
         return get_base_prompts()
+
+    def load_skills_catalog(self) -> list[dict[str, Any]]:
+        return get_skills_catalog()
 
     def build_prompt(
         self,

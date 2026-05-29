@@ -145,7 +145,12 @@ class VictorLoop:
 
                 if status == GatewayStatus.EXECUTED.value:
                     self._handle_executed(ctx=ctx, action=action, gateway_result=gateway_result)
-                    if self._is_completion_signal(action=action, gateway_result=gateway_result):
+                    if self._is_completion_signal(
+                        action=action,
+                        gateway_result=gateway_result,
+                        ticket=ticket,
+                        ctx=ctx,
+                    ):
                         return self._complete_run(
                             ctx=ctx, ticket=ticket, gateway_result=gateway_result
                         )
@@ -973,12 +978,22 @@ class VictorLoop:
                 fallback_event["logger_errors"] = type_errors
             self._local_audit_events.append(fallback_event)
 
-    def _is_completion_signal(self, *, action: Any, gateway_result: Mapping[str, Any]) -> bool:
+    def _is_completion_signal(
+        self,
+        *,
+        action: Any,
+        gateway_result: Mapping[str, Any],
+        ticket: Any,
+        ctx: RunContext,
+    ) -> bool:
         if gateway_result.get("status") == GatewayStatus.COMPLETED.value:
             return True
 
         result = gateway_result.get("result")
         if isinstance(result, Mapping) and bool(result.get("completed")):
+            return True
+
+        if self._ticket_goal_satisfied(ticket=ticket, ctx=ctx):
             return True
 
         if isinstance(action, Mapping):
@@ -991,6 +1006,53 @@ class VictorLoop:
                 return True
 
         return False
+
+    def _ticket_goal_satisfied(self, *, ticket: Any, ctx: RunContext) -> bool:
+        if not isinstance(ticket, Mapping):
+            return False
+
+        task = ticket.get("task")
+        if not isinstance(task, Mapping):
+            return False
+
+        expected_artifact = task.get("expected_artifact")
+        expected_content = task.get("expected_content")
+        if not expected_artifact:
+            return False
+
+        artifact_path = str(expected_artifact)
+        normalized_expected_content = (
+            str(expected_content).strip() if expected_content is not None else None
+        )
+
+        saw_matching_write = False
+        saw_matching_read = normalized_expected_content is None
+
+        for item in ctx.history:
+            if not isinstance(item, Mapping) or item.get("type") != "EXECUTION_RESULT":
+                continue
+            exec_result = item.get("result")
+            if not isinstance(exec_result, Mapping):
+                continue
+
+            result_meta = exec_result.get("result")
+            if not isinstance(result_meta, Mapping):
+                continue
+
+            result_path = str(result_meta.get("path") or "")
+            if result_path != artifact_path:
+                continue
+
+            operation = str(result_meta.get("operation") or "").lower()
+            if operation in {"write", "overwrite", "append"}:
+                saw_matching_write = True
+
+            if normalized_expected_content is not None and operation == "read":
+                stdout_value = str(exec_result.get("stdout") or "").strip()
+                if stdout_value == normalized_expected_content:
+                    saw_matching_read = True
+
+        return saw_matching_write and saw_matching_read
 
     def _classify_error(self, *, declared_error_type: Any = None, error: Any = None) -> ErrorType:
         if declared_error_type is not None:
