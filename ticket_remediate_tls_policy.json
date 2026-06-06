@@ -1,0 +1,42 @@
+{
+  "ticket_id": "ticket-remediate-tls-001",
+  "title": "Endurecer politica TLS de laboratorio",
+  "priority": "HIGH",
+  "status": "NEW",
+  "llm_model": "claude-sonnet-4-6",
+  "skills": [
+    "secure-file-remediation",
+    "vulnerability-triage",
+    "human-escalation"
+  ],
+  "client_context": {
+    "client_id": "sophia-demo",
+    "capability_level": "C2_CONTROLADO",
+    "environment": "on-prem"
+  },
+  "incident": {
+    "source": "Sophia",
+    "incident_id": "INC-LAB-TLS-001",
+    "vulnerability_id": "TLS-WEAK-POLICY",
+    "severity": "HIGH",
+    "summary": "Politica TLS debil en archivo de laboratorio"
+  },
+  "task": {
+    "objective": "Actualizar la politica TLS para exigir minimo TLS 1.2 y deshabilitar cifrados debiles",
+    "target_file": "runtime/lab/tls_policy.conf",
+    "instructions": [
+      "Valida el contenido actual antes de cambiarlo",
+      "Cambia min_tls_version a 1.2",
+      "Cambia allow_weak_ciphers a false",
+      "Mantiene mode=legacy sin tocar si no hace falta para cumplir el ticket",
+      "Verifica despues del cambio el archivo final"
+    ],
+    "expected_artifact": "runtime/lab/tls_policy.conf",
+    "expected_content": "min_tls_version=1.2\nallow_weak_ciphers=false\nmode=legacy",
+    "acceptance_criteria": [
+      "min_tls_version queda en 1.2",
+      "allow_weak_ciphers queda en false",
+      "mode no cambia"
+    ]
+  }
+}

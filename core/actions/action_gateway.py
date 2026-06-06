@@ -96,40 +96,47 @@ class ActionGateway:
         run_id = self._extract_run_id(ctx)
         timestamp = self._ts(self._now())
 
-        self._log_event(
-            phase="POLICY_CHECK",
-            message="Validating action against policy",
-            action_id=action_id,
-            run_id=run_id,
-            context=ctx,
-            result={"contracts_loaded": len(self._contract_modules)},
-        )
-
-        try:
-            raw_policy_result = self._validate_policy(action=action, context=ctx)
-            policy_result = self._normalize_policy_result(raw_policy_result)
-        except Exception as exc:
-            error_type = self._classify_error(exc)
-            failure = self._failure_payload(
-                error_type=error_type,
-                message=f"Policy validation failed: {exc}",
-                details={"stage": "policy.validate"},
-            )
+        if self._is_preapproved_action(action_id=action_id, context=ctx):
+            policy_result = {
+                "status": PolicyDecisionStatus.ALLOWED.value,
+                "reason": "Action pre-approved by human decision response",
+                "details": {"approved_action_id": action_id},
+            }
+        else:
             self._log_event(
-                phase="EXECUTION_FAILED",
-                message="Policy validation raised exception",
+                phase="POLICY_CHECK",
+                message="Validating action against policy",
                 action_id=action_id,
                 run_id=run_id,
                 context=ctx,
-                result=failure,
+                result={"contracts_loaded": len(self._contract_modules)},
             )
-            return ActionResult(
-                status=GatewayStatus.FAILED,
-                action_id=action_id,
-                run_id=run_id,
-                timestamp=timestamp,
-                failure=failure,
-            )
+
+            try:
+                raw_policy_result = self._validate_policy(action=action, context=ctx)
+                policy_result = self._normalize_policy_result(raw_policy_result)
+            except Exception as exc:
+                error_type = self._classify_error(exc)
+                failure = self._failure_payload(
+                    error_type=error_type,
+                    message=f"Policy validation failed: {exc}",
+                    details={"stage": "policy.validate"},
+                )
+                self._log_event(
+                    phase="EXECUTION_FAILED",
+                    message="Policy validation raised exception",
+                    action_id=action_id,
+                    run_id=run_id,
+                    context=ctx,
+                    result=failure,
+                )
+                return ActionResult(
+                    status=GatewayStatus.FAILED,
+                    action_id=action_id,
+                    run_id=run_id,
+                    timestamp=timestamp,
+                    failure=failure,
+                )
 
         decision_status = policy_result["status"]
 
@@ -423,6 +430,13 @@ class ActionGateway:
             "details": details,
         }
 
+    @staticmethod
+    def _is_preapproved_action(*, action_id: str, context: Mapping[str, Any]) -> bool:
+        approved_ids = context.get("preapproved_actions")
+        if isinstance(approved_ids, list):
+            return action_id in {str(item) for item in approved_ids}
+        return False
+
     def _build_decision_payload(
         self,
         *,
@@ -493,9 +507,10 @@ class ActionGateway:
             return None
 
         raw_status = str(execution_result.get("status") or execution_result.get("result") or "").upper()
+        declared_error_type = execution_result.get("error_type")
         if raw_status in {"FAILED", "ERROR", "EXECUTION_FAILURE", "TIMEOUT"}:
-            error_text = str(execution_result.get("error") or execution_result.get("message") or "Execution failed")
-            error_type = self._classify_error(error_text)
+            error_text = self._extract_execution_error_text(execution_result)
+            error_type = self._classify_error(declared_error_type or error_text)
             return self._failure_payload(
                 error_type=error_type,
                 message=error_text,
@@ -503,8 +518,8 @@ class ActionGateway:
             )
 
         if execution_result.get("success") is False:
-            error_text = str(execution_result.get("error") or execution_result.get("message") or "Execution failed")
-            error_type = self._classify_error(error_text)
+            error_text = self._extract_execution_error_text(execution_result)
+            error_type = self._classify_error(declared_error_type or error_text)
             return self._failure_payload(
                 error_type=error_type,
                 message=error_text,
@@ -526,6 +541,22 @@ class ActionGateway:
             "timestamp": self._ts(self._now()),
             "details": dict(details) if isinstance(details, Mapping) else details,
         }
+
+    @staticmethod
+    def _extract_execution_error_text(execution_result: Mapping[str, Any]) -> str:
+        message = str(execution_result.get("error") or execution_result.get("message") or "").strip()
+        stderr = str(execution_result.get("stderr") or "").strip()
+        stdout = str(execution_result.get("stdout") or "").strip()
+
+        if message and message != "Execution failed":
+            return message
+        if stderr and stdout:
+            return f"{stderr} | {stdout}"
+        if stderr:
+            return stderr
+        if stdout:
+            return stdout
+        return message or "Execution failed"
 
     def _log_event(
         self,
@@ -596,6 +627,9 @@ class ActionGateway:
         return "unknown-run"
 
     def _classify_error(self, error: Any) -> ErrorType:
+        normalized = str(error).strip().upper()
+        if normalized in {item.value for item in ErrorType}:
+            return ErrorType(normalized)
         if isinstance(error, TimeoutError):
             return ErrorType.TIMEOUT
         if isinstance(error, PermissionError):

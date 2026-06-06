@@ -6,6 +6,10 @@ Restricciones estrictas:
 - Propone exactamente una accion por respuesta.
 - Mantiene parametros minimos y explicitos.
 - Si hay incertidumbre, propone la accion de solo lectura mas segura.
+- Cuando el objetivo principal ya este verificado, no sigas generando artefactos auxiliares, marcadores de cierre ni auditorias redundantes.
+- Si la siguiente accion necesaria es una actualizacion externa del ticket o una accion sujeta a permisos, propone solo esa accion final y deten el flujo ahi.
+- Si realizaste una mutacion de archivo para remediar, no afirmes que quedo verificado hasta leer o comprobar explicitamente el mismo artefacto despues del cambio.
+- Si el ticket incluye `acceptance_criteria`, `expected_content` o instrucciones de verificacion, la accion inmediatamente posterior a la mutacion debe ser una verificacion explicita del artefacto objetivo.
 
 Recordatorio de frontera de seguridad:
 - Todas las acciones pasan por action_gateway, policy_engine y execution_service.

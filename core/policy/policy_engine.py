@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from pathlib import PurePath
 import re
 import shlex
@@ -258,14 +259,15 @@ class PolicyEngine:
 
         if level == CapabilityLevel.C2_CONTROLADO:
             allowed_hosts = self._c2_network_allowlist(context)
-            if host and host not in allowed_hosts:
+            host_in_allowlist = host and host in allowed_hosts
+            if host and not host_in_allowlist:
                 return self._requires_decision(
                     reason="HTTP host outside C2 allowlist",
                     risk=RiskLevel.HIGH,
                     permission="NETWORK_EGRESS",
                     details={"url": url, "method": method, "host": host},
                 )
-            if method not in {"GET", "HEAD"}:
+            if not host_in_allowlist and method not in {"GET", "HEAD"}:
                 return self._requires_decision(
                     reason="Mutating HTTP methods require approval in C2",
                     risk=RiskLevel.MEDIUM,
@@ -343,6 +345,18 @@ class PolicyEngine:
                 details={"action": dict(action)},
             )
 
+        scoped_path = self._resolve_scoped_path(path=path, context=context)
+        if not self._is_path_allowed(
+            resolved_path=scoped_path,
+            operation=operation,
+            context=context,
+        ):
+            return self._blocked(
+                reason="File action is outside the ticket remediation scope",
+                risk=RiskLevel.HIGH,
+                details={"operation": operation, "path": str(scoped_path)},
+            )
+
         if level == CapabilityLevel.C1_RESTRINGIDO and operation not in {"read", "list", "stat", "exists"}:
             return self._blocked(
                 reason="C1 only allows read-only file operations",
@@ -362,7 +376,7 @@ class PolicyEngine:
         return self._allowed(
             reason="File action allowed by policy",
             risk=risk,
-            details={"operation": operation, "path": path, "capability_level": level.value},
+            details={"operation": operation, "path": str(scoped_path), "capability_level": level.value},
         )
 
     def _check_universal_block_patterns(self, command: str) -> PolicyResult | None:
@@ -511,6 +525,57 @@ class PolicyEngine:
         if isinstance(configured, set):
             return {str(item) for item in configured}
         return set(self.mcp_allowlist)
+
+    @staticmethod
+    def _resolve_scoped_path(*, path: str, context: Mapping[str, Any]) -> Path:
+        workspace_root = context.get("workspace_root") or context.get("workspace")
+        candidate = Path(path).expanduser()
+        if workspace_root and not candidate.is_absolute():
+            candidate = Path(str(workspace_root)).expanduser() / candidate
+        return candidate.resolve()
+
+    def _is_path_allowed(
+        self,
+        *,
+        resolved_path: Path,
+        operation: str,
+        context: Mapping[str, Any],
+    ) -> bool:
+        allowed_paths = self._normalized_paths(context.get("allowed_paths"))
+        allowed_directories = self._normalized_paths(context.get("allowed_directories"))
+        if not allowed_paths and not allowed_directories:
+            return True
+
+        path_text = str(resolved_path)
+        if operation == "list":
+            return path_text in allowed_directories or path_text in allowed_paths
+
+        if operation in {"write", "overwrite", "append", "delete", "remove", "move", "rename", "chmod", "chown"}:
+            return path_text in allowed_paths
+
+        if path_text in allowed_paths:
+            return True
+        return any(self._is_relative_to(resolved_path, Path(directory)) for directory in allowed_directories)
+
+    @staticmethod
+    def _normalized_paths(raw_value: Any) -> set[str]:
+        if not isinstance(raw_value, (list, set, tuple)):
+            return set()
+        normalized: set[str] = set()
+        for item in raw_value:
+            try:
+                normalized.add(str(Path(str(item)).expanduser().resolve()))
+            except OSError:
+                continue
+        return normalized
+
+    @staticmethod
+    def _is_relative_to(path: Path, root: Path) -> bool:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
 
     @staticmethod
     def _allowed(reason: str, risk: RiskLevel, details: Mapping[str, Any] | None = None) -> PolicyResult:

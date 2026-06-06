@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import os
+from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from core.llm import claude_adapter
@@ -13,7 +16,13 @@ from core.decisions import decision_engine
 from core.execution import execution_service
 from core.observability import audit_logger
 from core.policy import policy_engine
+from core.state import checkpoint_store
+from core.tickets import ticket_client
 from core.tickets import state_manager
+from core.orchestrator import pause_resume_controller
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 try:
     from core.prompts.builders import prompt_builder
@@ -82,6 +91,9 @@ class VictorLoop:
         state_manager_module: Any = state_manager,
         decision_engine_module: Any = decision_engine,
         prompt_builder_module: Any = prompt_builder,
+        checkpoint_store_module: Any = checkpoint_store,
+        pause_resume_controller_module: Any = pause_resume_controller,
+        ticket_client_module: Any = ticket_client,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
@@ -95,6 +107,9 @@ class VictorLoop:
         self.state_manager = state_manager_module
         self.decision_engine = decision_engine_module
         self.prompt_builder = prompt_builder_module
+        self.checkpoint_store = checkpoint_store_module
+        self.pause_resume_controller = pause_resume_controller_module
+        self.ticket_client = ticket_client_module
 
         self.retry_limits: dict[ErrorType, int] = {
             ErrorType.TIMEOUT: 2,
@@ -115,6 +130,10 @@ class VictorLoop:
     def run(self, ticket: Any) -> dict[str, Any]:
         self._retry_counters = {}
         self._local_audit_events = []
+
+        resume_payload = self._extract_resume_payload(ticket)
+        if resume_payload is not None:
+            return self._resume_run(ticket=ticket, resume_payload=resume_payload)
 
         ctx = self._initialize_run_context(ticket)
         self._set_execution_status(
@@ -254,6 +273,128 @@ class VictorLoop:
             action=None,
             details={"max_iterations": self.max_iterations},
         )
+
+    def _extract_resume_payload(self, ticket: Any) -> dict[str, Any] | None:
+        if not isinstance(ticket, Mapping):
+            return None
+        resume = ticket.get("_resume")
+        return dict(resume) if isinstance(resume, Mapping) else None
+
+    def _resume_run(self, *, ticket: Any, resume_payload: Mapping[str, Any]) -> dict[str, Any]:
+        checkpoint = resume_payload.get("checkpoint")
+        decision = resume_payload.get("decision")
+        if not isinstance(checkpoint, Mapping) or not isinstance(decision, Mapping):
+            raise ValueError("Resume payload requires checkpoint and decision objects")
+
+        ctx = self._run_context_from_checkpoint(checkpoint)
+        selected_option = str(((decision.get("response") or {}).get("selected_option") or "")).upper()
+        comment = (decision.get("response") or {}).get("comment")
+
+        if selected_option == "A":
+            action = self._resume_action_from_decision(decision)
+            gateway_raw = self._dispatch_action(
+                ticket=ticket,
+                ctx=ctx,
+                action=action,
+                extra_context={"preapproved_actions": [self._extract_action_id(action)]},
+            )
+            gateway_result = self._normalize_gateway_result(gateway_raw)
+            status = gateway_result["status"]
+            if status == GatewayStatus.EXECUTED.value:
+                self._handle_executed(ctx=ctx, action=action, gateway_result=gateway_result)
+                return self._complete_run(ctx=ctx, ticket=ticket, gateway_result=gateway_result)
+            if status == GatewayStatus.COMPLETED.value:
+                return self._complete_run(ctx=ctx, ticket=ticket, gateway_result=gateway_result)
+            if status == GatewayStatus.BLOCKED.value:
+                return self._handle_blocked(ctx=ctx, ticket=ticket, action=action, gateway_result=gateway_result)
+            if status == GatewayStatus.WAITING_DECISION.value:
+                return self._handle_waiting_decision(ctx=ctx, ticket=ticket, action=action, gateway_result=gateway_result)
+            resumed_error_type = self._classify_error(
+                declared_error_type=gateway_result.get("error_type"),
+                error=gateway_result.get("raw") if isinstance(gateway_result.get("raw"), Mapping) else gateway_result.get("error"),
+            )
+            resumed_error_message = str(
+                gateway_result.get("message")
+                or gateway_result.get("error")
+                or "Approved action failed during resume"
+            )
+            return self._fail_run(
+                ctx=ctx,
+                ticket=ticket,
+                error_type=resumed_error_type,
+                message=resumed_error_message,
+                action=action,
+                details=gateway_result,
+            )
+
+        if selected_option == "B":
+            self._set_execution_status(ctx, ExecutionStatus.BLOCKED, ticket=ticket, ticket_status="DENIED")
+            details = {"decision": dict(decision), "comment": comment}
+            failure_response = self._build_failure_response(
+                ctx=ctx,
+                error_type=ErrorType.POLICY_BLOCKED,
+                message=str(comment or "Human denied the pending action"),
+                action=self._resume_action_from_decision(decision),
+                details=details,
+            )
+            return {
+                "status": "FAILED",
+                "execution_status": ctx.execution_status.value,
+                "run_context": self._context_payload(ctx),
+                "failure_response": failure_response,
+            }
+
+        if selected_option == "C":
+            paused_decision = dict(decision)
+            paused_decision["status"] = "PAUSED"
+            self._set_execution_status(
+                ctx,
+                ExecutionStatus.WAITING_DECISION,
+                ticket=ticket,
+                ticket_status="WAITING_DECISION",
+                pending_decision=paused_decision,
+            )
+            return {
+                "status": "WAITING_DECISION",
+                "execution_status": ctx.execution_status.value,
+                "run_context": self._context_payload(ctx),
+                "pending_decision": paused_decision,
+            }
+
+        raise ValueError(f"Unsupported decision option: {selected_option or 'missing'}")
+
+    def _run_context_from_checkpoint(self, checkpoint: Mapping[str, Any]) -> RunContext:
+        run_context = checkpoint.get("run_context")
+        if not isinstance(run_context, Mapping):
+            raise ValueError("Checkpoint is missing run_context")
+
+        started_at = self._parse_datetime(run_context.get("started_at"))
+        updated_at = self._parse_datetime(run_context.get("updated_at"))
+        status = self._execution_status_from_value(run_context.get("execution_status"))
+        history_raw = checkpoint.get("history")
+        history = [dict(item) for item in history_raw if isinstance(item, Mapping)] if isinstance(history_raw, list) else []
+        pending = checkpoint.get("pending_decision")
+
+        return RunContext(
+            run_id=str(run_context.get("run_id") or "unknown-run"),
+            ticket_id=str(run_context.get("ticket_id") or "unknown-ticket"),
+            started_at=started_at,
+            updated_at=updated_at,
+            correlation_id=str(run_context.get("correlation_id") or f"{run_context.get('ticket_id')}:{run_context.get('run_id')}"),
+            execution_status=status,
+            iteration=max(0, int(run_context.get("iteration") or 0)),
+            pending_decision=dict(pending) if isinstance(pending, Mapping) else None,
+            history=history,
+        )
+
+    def _resume_action_from_decision(self, decision: Mapping[str, Any]) -> Any:
+        action_preview = decision.get("action_preview")
+        if isinstance(action_preview, Mapping):
+            return dict(action_preview)
+        action = decision.get("action")
+        if isinstance(action, Mapping):
+            return dict(action)
+        raise ValueError("Decision payload does not contain an actionable preview")
 
     def _initialize_run_context(self, ticket: Any) -> RunContext:
         ticket_id = self._extract_ticket_id(ticket)
@@ -405,7 +546,14 @@ class VictorLoop:
 
         return {"type": "MODEL_OUTPUT", "payload": response}
 
-    def _dispatch_action(self, *, ticket: Any, ctx: RunContext, action: Any) -> Any:
+    def _dispatch_action(
+        self,
+        *,
+        ticket: Any,
+        ctx: RunContext,
+        action: Any,
+        extra_context: Mapping[str, Any] | None = None,
+    ) -> Any:
         self._audit(
             ctx,
             Phase.POLICY,
@@ -414,20 +562,33 @@ class VictorLoop:
             result={"execution_status": ctx.execution_status.value},
         )
 
+        prepared_action = self._normalize_action_for_ticket_context(action=action, ticket=ticket)
+
         payload = {
-            "action": action,
+            "action": prepared_action,
             "ticket": ticket,
             "run_context": self._context_payload(ctx),
             "policy_engine": self.policy_engine,
             "execution_service": self.execution_service,
         }
+        combined_context = self._build_action_context(ticket=ticket, ctx=ctx)
+        if isinstance(extra_context, Mapping):
+            combined_context.update(dict(extra_context))
+        payload["context"] = combined_context
 
         gateway_result = self._invoke_component(
             component=self.action_gateway,
             method_names=("handle_action", "process_action", "route_action", "dispatch", "execute"),
             attempts=[
                 ((), payload),
-                ((action,), {"ticket": ticket, "run_context": self._context_payload(ctx)}),
+                (
+                    (prepared_action,),
+                    {
+                        "ticket": ticket,
+                        "run_context": self._context_payload(ctx),
+                        "context": dict(extra_context or {}),
+                    },
+                ),
                 ((payload,), {}),
             ],
             component_name="action_gateway",
@@ -442,6 +603,108 @@ class VictorLoop:
             result=gateway_result,
         )
         return gateway_result
+
+    def _build_action_context(self, *, ticket: Any, ctx: RunContext) -> dict[str, Any]:
+        ticket_scope = self._ticket_scope_context(ticket)
+        workspace_root = str(ticket_scope.get("scope_root") or PROJECT_ROOT)
+        context: dict[str, Any] = {
+            "workspace_root": workspace_root,
+            "working_dir": workspace_root,
+            "capability_level": self._extract_client_context(ticket).get("capability_level"),
+        }
+        context.update(ticket_scope)
+
+        ticket_api = ticket.get("ticket_api") if isinstance(ticket, Mapping) else {}
+        if isinstance(ticket_api, Mapping):
+            base_url = str(ticket_api.get("base_url") or "")
+            if base_url:
+                parsed = urlparse(base_url)
+                host = parsed.hostname
+                if host:
+                    existing = context.get("network_allowlist")
+                    if isinstance(existing, list):
+                        if host not in existing:
+                            existing.append(host)
+                    else:
+                        context["network_allowlist"] = [str(host)]
+
+        return context
+
+    def _ticket_scope_context(self, ticket: Any) -> dict[str, Any]:
+        if not isinstance(ticket, Mapping):
+            return {}
+
+        task = ticket.get("task")
+        if not isinstance(task, Mapping):
+            return {}
+
+        allowed_files: set[str] = set()
+        allowed_directories: set[str] = set()
+
+        for key in ("target_file", "expected_artifact"):
+            raw_path = task.get(key)
+            if not raw_path:
+                continue
+            resolved = self._resolve_ticket_path(str(raw_path))
+            allowed_files.add(str(resolved))
+            allowed_directories.add(str(resolved.parent))
+
+        if not allowed_files and not allowed_directories:
+            return {}
+
+        scope_root = self._derive_scope_root(allowed_files, allowed_directories)
+
+        return {
+            "allowed_paths": sorted(allowed_files),
+            "allowed_directories": sorted(allowed_directories),
+            "scope_root": str(scope_root),
+        }
+
+    def _resolve_ticket_path(self, raw_path: str) -> Path:
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        return path.resolve()
+
+    def _derive_scope_root(self, allowed_files: set[str], allowed_directories: set[str]) -> Path:
+        if all(self._is_relative_to(Path(path), PROJECT_ROOT) for path in allowed_files | allowed_directories):
+            return PROJECT_ROOT
+        candidates = sorted(allowed_files | allowed_directories)
+        return Path(candidates[0]).parent if len(candidates) == 1 else Path(os.path.commonpath(candidates))
+
+    @staticmethod
+    def _is_relative_to(path: Path, root: Path) -> bool:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    def _normalize_action_for_ticket_context(self, *, action: Any, ticket: Any) -> Any:
+        if not isinstance(ticket, Mapping):
+            return action
+        normalized_action = action
+        if not isinstance(normalized_action, Mapping):
+            to_dict = getattr(normalized_action, "to_dict", None)
+            if callable(to_dict):
+                value = to_dict()
+                if isinstance(value, Mapping):
+                    normalized_action = dict(value)
+            elif hasattr(normalized_action, "__dict__"):
+                normalized_action = {
+                    key: value
+                    for key, value in vars(normalized_action).items()
+                    if not key.startswith("_")
+                }
+        if not isinstance(normalized_action, Mapping):
+            return action
+        normalizer = getattr(self.ticket_client, "normalize_http_action_for_ticket", None)
+        if callable(normalizer):
+            try:
+                return normalizer(dict(normalized_action), dict(ticket))
+            except Exception:
+                return action
+        return action
 
     def _normalize_gateway_result(self, raw: Any) -> dict[str, Any]:
         if not isinstance(raw, Mapping):
@@ -607,6 +870,7 @@ class VictorLoop:
             action=action,
             result=ctx.pending_decision,
         )
+        self._persist_pause_state(ctx=ctx, ticket=ticket)
 
         return {
             "status": "WAITING_DECISION",
@@ -882,6 +1146,34 @@ class VictorLoop:
             "final_result": final_result,
         }
 
+    def _persist_pause_state(self, *, ctx: RunContext, ticket: Any) -> None:
+        pending_decision = ctx.pending_decision
+        if isinstance(pending_decision, Mapping):
+            self._invoke_component(
+                component=getattr(self.pause_resume_controller, "decision_store", None),
+                method_names=("save", "create", "upsert", "store", "add"),
+                attempts=[((dict(pending_decision),), {}), ((), {"decision": dict(pending_decision)})],
+                component_name="decision_store",
+                required=False,
+            )
+
+        checkpoint_payload = {
+            "run_id": ctx.run_id,
+            "ticket_id": ctx.ticket_id,
+            "run_context": self._context_payload(ctx),
+            "history": list(ctx.history),
+            "pending_decision": dict(pending_decision) if isinstance(pending_decision, Mapping) else None,
+            "ticket": self._extract_ticket_context(ticket),
+            "saved_at": self._ts(self._now()),
+        }
+        self._invoke_component(
+            component=self.checkpoint_store,
+            method_names=("save_checkpoint", "save_run_state", "persist_state"),
+            attempts=[((checkpoint_payload,), {}), ((), checkpoint_payload)],
+            component_name="checkpoint_store",
+            required=False,
+        )
+
     def _context_payload(self, ctx: RunContext) -> dict[str, Any]:
         return {
             "run_id": ctx.run_id,
@@ -920,6 +1212,33 @@ class VictorLoop:
     def _extract_ticket_id(self, ticket: Any) -> str:
         ticket_id = self._get_value(ticket, "ticket_id", "id", "uuid", default=None)
         return str(ticket_id) if ticket_id is not None else "unknown-ticket"
+
+    @staticmethod
+    def _extract_action_id(action: Any) -> str:
+        if isinstance(action, Mapping):
+            value = action.get("action_id") or action.get("id")
+            if value is not None:
+                return str(value)
+        return f"action-{uuid4()}"
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                pass
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _execution_status_from_value(value: Any) -> ExecutionStatus:
+        normalized = str(value or "RUNNING").upper()
+        for item in ExecutionStatus:
+            if item.value == normalized:
+                return item
+        return ExecutionStatus.RUNNING
 
     def _audit(
         self,
@@ -1020,13 +1339,23 @@ class VictorLoop:
         if not expected_artifact:
             return False
 
-        artifact_path = str(expected_artifact)
+        artifact_path = str(self._resolve_ticket_path(str(expected_artifact)))
         normalized_expected_content = (
             str(expected_content).strip() if expected_content is not None else None
         )
+        instructions = task.get("instructions")
+        acceptance_criteria = task.get("acceptance_criteria")
+        requires_post_write_verification = bool(normalized_expected_content is not None)
+        if isinstance(instructions, list):
+            instructions_text = " ".join(str(item).lower() for item in instructions)
+            requires_post_write_verification = requires_post_write_verification or any(
+                marker in instructions_text for marker in ("verifica", "verify", "asegura")
+            )
+        if isinstance(acceptance_criteria, list) and acceptance_criteria:
+            requires_post_write_verification = True
 
         saw_matching_write = False
-        saw_matching_read = normalized_expected_content is None
+        saw_matching_read = not requires_post_write_verification
 
         for item in ctx.history:
             if not isinstance(item, Mapping) or item.get("type") != "EXECUTION_RESULT":

@@ -37,13 +37,21 @@ Runtime seguro, on-premise y single-tenant para ejecutar tareas operativas con c
    - Valor por defecto configurado: `claude-sonnet-4-6`
 
    Ejemplo:
-   ```yaml
-   llm:
-     provider: "anthropic"
-     model: "claude-sonnet-4-6"
-     temperature: 0.0
-     max_tokens: 4000
-   ```
+    ```yaml
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.0
+      max_tokens: 4000
+    ticket_api:
+      base_url: "https://txdxai-flask.replit.app/api"
+      update_template: "/tickets/{ticket_id}"
+      decision_template: "/tickets/{ticket_id}/decision/select"
+    ```
+
+   Notas para integracion con tickets:
+   - `ticket_api.base_url` permite que VICTOR construya URLs completas para actualizar tickets.
+   - Si el agente propone una accion HTTP de cierre con ruta relativa, el runtime intentara resolverla contra `ticket_api.base_url`.
 
 5. Ejecutar un ticket de prueba:
    - `python scripts/run_agent.py` (abre menu interactivo)
@@ -104,3 +112,6 @@ Tambien puedes ejecutar opciones directas por bandera:
 
 - `python scripts/run_agent.py --demo-patch-flow --pretty`
 - `python scripts/run_agent.py --run-demo-test`
+
+
+\

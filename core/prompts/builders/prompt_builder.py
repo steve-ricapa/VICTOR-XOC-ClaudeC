@@ -242,16 +242,71 @@ def _render_completion_guidance(ticket: Mapping[str, Any]) -> str:
 
     artifact = task.get("expected_artifact")
     content = task.get("expected_content")
+    acceptance_criteria = task.get("acceptance_criteria")
     criteria: list[str] = []
 
     if artifact:
         criteria.append(f"- Considera el objetivo principal cumplido cuando el artefacto `{artifact}` exista.")
     if content:
         criteria.append(f"- Si ademas verificas que el contenido esperado es `{content}`, da por completada la remediacion principal.")
+    if isinstance(acceptance_criteria, list) and acceptance_criteria:
+        criteria.append("- Antes de cerrar, verifica explicitamente en el artefacto objetivo que los acceptance_criteria se cumplieron despues de la mutacion.")
+        criteria.append("- Si mutaste el archivo objetivo, la siguiente accion debe ser leer o comprobar ese mismo archivo; no cierres el ticket solo con la evidencia del write.")
 
     criteria.append("- Despues de cumplir el objetivo principal y verificarlo, no sigas creando artefactos auxiliares ni verificaciones redundantes.")
     criteria.append("- Si necesitas cerrar el ticket, la siguiente accion debe ser la minima accion final de cierre o escalacion, no una nueva cadena de auditoria local.")
     return "\n".join(criteria)
+
+
+def _render_ticket_api_contract(ticket: Mapping[str, Any]) -> str:
+    ticket_api = ticket.get("ticket_api")
+    if not isinstance(ticket_api, Mapping):
+        return (
+            "No hay ticket_api configurada en este ticket. Si necesitas proponer una accion HTTP de cierre, "
+            "usa el contrato real solo si tienes una URL completa. No inventes rutas relativas sin base_url."
+        )
+
+    base_url = str(ticket_api.get("base_url") or "N/D")
+    update_template = str(ticket_api.get("update_template") or "/api/tickets/{ticket_id}")
+    decision_template = str(ticket_api.get("decision_template") or "/api/tickets/{ticket_id}/decision/select")
+
+    backend_id = ticket.get("backend_ticket_id") or ticket.get("id")
+    api_ticket_id = str(int(backend_id)) if backend_id is not None else "{ticket_id}"
+    resolved_update_url = f"{base_url.rstrip('/')}/tickets/{api_ticket_id}" if base_url != "N/D" else update_template
+
+    allowed_statuses = ticket_api.get("allowed_statuses")
+    if not isinstance(allowed_statuses, list):
+        allowed_statuses = [
+            "PENDING",
+            "EXECUTED",
+            "FAILED",
+            "DERIVED",
+            "PREAPROBADO",
+            "APROBADO",
+            "RECHAZADO",
+            "PENDIENTE_EJECUCION",
+            "EN_EJECUCION",
+            "RESUELTO",
+            "FALLIDO",
+        ]
+    statuses_text = ", ".join(str(item) for item in allowed_statuses)
+    return "\n".join(
+        [
+            f"- base_url: {base_url}",
+            f"- endpoint para actualizar ticket: PUT {update_template}",
+            f"- URL concreta para CIERRE de este ticket: PUT {resolved_update_url}",
+            f"- endpoint para seleccionar decision humana: PATCH {decision_template}",
+            f"- estados permitidos conocidos: {statuses_text}",
+            "- IMPORTANTE: Siempre usa la URL CONCRETA (con el ID numerico del backend) para las acciones HTTP, no uses placeholders como {ticket_id}.",
+            f"- REGLAS ESTRICTAS DE PAYLOAD PARA PUT {resolved_update_url}:",
+            "  1. CIERRE (RESUELTO, FALLIDO, DERIVED): Es OBLIGATORIO enviar 'status', 'execution_summary' (string), 'execution_logs' (objeto con metadatos + timeline) Y 'action_plan' (objeto con summary + steps). NO uses la clave 'resolution'.",
+            "     Formato exacto de execution_logs: {\"run_id\": string, \"correlation_id\": string, \"iterations\": number, \"duration_seconds\": number, \"final_result\": {\"status\": string, \"message\": string}, \"timeline\": [{\"step\": \"read|write|verify|http\", \"artifact\": string, \"result\": string}]}",
+            "     Formato exacto de action_plan: {\"summary\": string (resumen de lo ejecutado), \"steps\": [{\"tool\": \"shell|file|http|mcp\", \"description\": string}]} - Cada paso del timeline debe tener su correspondiente entrada en steps.",
+            "  2. DECISION HUMANA: Es OBLIGATORIO enviar 'execution_status': 'WAITING_DECISION' y 'pending_decision' (con 'decision_id', 'question' y 'options' [minimo 2 opciones con 'option_id' y 'title']).",
+            "  3. PENDIENTE_EJECUCION: Es OBLIGATORIO enviar 'status': 'PENDIENTE_EJECUCION' y 'capability_level' (string).",
+            "  4. Los campos 'run_id', 'correlation_id', 'iterations', 'duration_seconds' DEBEN extraerse del [CONTEXTO_EJECUCION]. El campo 'final_result' debe reflejar el estado final de la ejecucion. El array 'timeline' debe contener cada paso ejecutado en orden cronologico.",
+        ]
+    )
 
 
 def _render_ticket_context(ticket: Mapping[str, Any]) -> str:
@@ -361,6 +416,7 @@ def build_prompt(
         "[CONTEXTO_CLIENTE]\n" + _render_client_context(client_map),
         "[SKILLS_APLICABLES]\n" + _render_selected_skills(ticket_map),
         "[CRITERIO_CIERRE]\n" + _render_completion_guidance(ticket_map),
+        "[CONTRATO_API_TICKETS]\n" + _render_ticket_api_contract(ticket_map),
         "[CONTEXTO_EJECUCION]\n" + _json(run_map),
         "[HISTORIAL]\n" + _json(history_list),
         (

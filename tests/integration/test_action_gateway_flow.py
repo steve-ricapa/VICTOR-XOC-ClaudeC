@@ -108,3 +108,34 @@ def test_action_gateway_classifies_execution_timeout() -> None:
 
     assert result["status"] == "FAILED"
     assert result["error_type"] == "TIMEOUT"
+
+
+def test_action_gateway_preserves_structured_execution_error_type() -> None:
+    class AllowAllPolicy:
+        @staticmethod
+        def validate(action: Any, context: Mapping[str, Any]) -> dict[str, Any]:
+            return {"status": "ALLOWED", "reason": "test"}
+
+    class FailingExecutionService:
+        @staticmethod
+        def execute(action: Any, context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+            return {
+                "status": "FAILED",
+                "success": False,
+                "error_type": "TOOL_ERROR",
+                "message": "HTTP Error 401: Unauthorized",
+                "stdout": '{"msg":"Token has expired"}',
+            }
+
+    gateway = ActionGateway(
+        policy_engine_module=AllowAllPolicy(),
+        execution_service_module=FailingExecutionService(),
+    )
+
+    result = gateway.handle_action(
+        action={"action_id": "action-int-6", "type": "http", "parameters": {"method": "PUT", "url": "https://example.test/tickets/1"}},
+        context={"run_id": "run-int-6", "capability_level": "C3_ELEVADO_SUPERVISADO"},
+    )
+
+    assert result["status"] == "FAILED"
+    assert result["error_type"] == "TOOL_ERROR"

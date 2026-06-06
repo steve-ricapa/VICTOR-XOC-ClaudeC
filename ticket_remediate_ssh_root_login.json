@@ -1,0 +1,41 @@
+{
+  "ticket_id": "ticket-remediate-ssh-001",
+  "title": "Remediar configuracion insegura de SSH",
+  "priority": "HIGH",
+  "status": "NEW",
+  "llm_model": "claude-sonnet-4-6",
+  "skills": [
+    "secure-file-remediation",
+    "vulnerability-triage",
+    "human-escalation"
+  ],
+  "client_context": {
+    "client_id": "sophia-demo",
+    "capability_level": "C2_CONTROLADO",
+    "environment": "on-prem"
+  },
+  "incident": {
+    "source": "Sophia",
+    "incident_id": "INC-LAB-SSH-001",
+    "vulnerability_id": "CIS-SSH-ROOT-LOGIN",
+    "severity": "HIGH",
+    "summary": "Se detecto PermitRootLogin habilitado en configuracion SSH de laboratorio"
+  },
+  "task": {
+    "objective": "Cambiar PermitRootLogin yes por PermitRootLogin no en el archivo de laboratorio",
+    "target_file": "runtime/lab/sshd_config.demo",
+    "instructions": [
+      "Verifica primero el estado actual del archivo objetivo",
+      "Aplica solo el cambio minimo necesario para deshabilitar root login",
+      "No modifiques otras lineas no relacionadas",
+      "Despues del cambio verifica que PermitRootLogin no este en no",
+      "Si todo sale bien, prepara el cierre del ticket con evidencia"
+    ],
+    "expected_artifact": "runtime/lab/sshd_config.demo",
+    "expected_content": "Port 22\nPermitRootLogin no\nPasswordAuthentication yes\nX11Forwarding no",
+    "acceptance_criteria": [
+      "El archivo conserva el resto de lineas originales",
+      "PermitRootLogin queda en no"
+    ]
+  }
+}

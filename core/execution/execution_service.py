@@ -203,7 +203,7 @@ class ExecutionService:
         if not raw_path:
             raise ValueError("File action missing path")
 
-        path = self._resolve_safe_path(str(raw_path), context)
+        path = self._resolve_safe_path(str(raw_path), context, operation=operation)
 
         if operation == "read":
             content = path.read_text(encoding="utf-8", errors="replace")
@@ -294,8 +294,22 @@ class ExecutionService:
 
         data: bytes | None = None
         if action.get("json") is not None:
-            data = json.dumps(action["json"]).encode("utf-8")
+            payload = action["json"]
+            if isinstance(payload, dict):
+                payload = self._inject_action_plan(payload)
+            data = json.dumps(payload).encode("utf-8")
             headers.setdefault("Content-Type", "application/json")
+        elif action.get("body") is not None:
+            body_val = action["body"]
+            if isinstance(body_val, dict):
+                payload = self._inject_action_plan(body_val)
+                data = json.dumps(payload).encode("utf-8")
+                headers.setdefault("Content-Type", "application/json")
+            elif isinstance(body_val, list):
+                data = json.dumps(body_val).encode("utf-8")
+                headers.setdefault("Content-Type", "application/json")
+            else:
+                data = str(body_val).encode("utf-8")
         elif action.get("data") is not None:
             raw_data = action["data"]
             data = raw_data if isinstance(raw_data, bytes) else str(raw_data).encode("utf-8")
@@ -327,6 +341,28 @@ class ExecutionService:
                 "error_type": ExecutionErrorType.TOOL_ERROR.value,
                 "result": {"status_code": int(getattr(exc, "code", 0) or 0), "url": url, "method": method},
             }
+
+    @staticmethod
+    def _inject_action_plan(payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("action_plan") is not None:
+            return payload
+        execution_logs = payload.get("execution_logs")
+        if not isinstance(execution_logs, dict):
+            return payload
+        timeline = execution_logs.get("timeline")
+        if not isinstance(timeline, list) or not timeline:
+            return payload
+        step_tool_map = {"read": "file", "write": "file", "verify": "file", "http": "http"}
+        steps = []
+        for entry in timeline:
+            step_type = str(entry.get("step", "shell")).lower()
+            tool = step_tool_map.get(step_type, "shell")
+            artifact = entry.get("artifact", "")
+            result = entry.get("result", "")
+            description = f"{step_type}: {artifact}" if artifact else result
+            steps.append({"tool": tool, "description": description})
+        payload["action_plan"] = {"summary": "", "steps": steps}
+        return payload
 
     def _execute_mcp(self, action: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
         tool = action.get("tool") or action.get("tool_name") or action.get("name")
@@ -537,7 +573,7 @@ class ExecutionService:
                 return str(value)
         return None
 
-    def _resolve_safe_path(self, raw_path: str, context: Mapping[str, Any]) -> Path:
+    def _resolve_safe_path(self, raw_path: str, context: Mapping[str, Any], *, operation: str) -> Path:
         workspace_root = context.get("workspace_root") or context.get("workspace")
         path = Path(raw_path).expanduser()
         if workspace_root:
@@ -547,8 +583,58 @@ class ExecutionService:
             resolved = path.resolve()
             if not resolved.is_relative_to(root):
                 raise PermissionError(f"Path escapes workspace root: {resolved}")
-            return resolved
-        return path.resolve()
+        else:
+            resolved = path.resolve()
+
+        self._assert_path_in_scope(
+            resolved=resolved,
+            raw_path=raw_path,
+            operation=operation,
+            context=context,
+        )
+        return resolved
+
+    def _assert_path_in_scope(
+        self,
+        *,
+        resolved: Path,
+        raw_path: str,
+        operation: str,
+        context: Mapping[str, Any],
+    ) -> None:
+        allowed_paths = self._normalized_paths(context.get("allowed_paths"))
+        allowed_directories = self._normalized_paths(context.get("allowed_directories"))
+        if not allowed_paths and not allowed_directories:
+            return
+
+        resolved_text = str(resolved)
+        if resolved_text in allowed_paths:
+            return
+        if operation in {"read", "exists", "stat", "list"} and any(
+            self._is_relative_to(resolved, Path(directory)) for directory in allowed_directories
+        ):
+            return
+        raise PermissionError(f"Path outside remediation scope: {raw_path} -> {resolved}")
+
+    @staticmethod
+    def _normalized_paths(raw_value: Any) -> set[str]:
+        if not isinstance(raw_value, (list, set, tuple)):
+            return set()
+        normalized: set[str] = set()
+        for item in raw_value:
+            try:
+                normalized.add(str(Path(str(item)).expanduser().resolve()))
+            except OSError:
+                continue
+        return normalized
+
+    @staticmethod
+    def _is_relative_to(path: Path, root: Path) -> bool:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
 
     def _audit(
         self,

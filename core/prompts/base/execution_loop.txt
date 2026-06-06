@@ -17,3 +17,7 @@ Guia:
 - Para acciones file incluye operation y path.
 - Para acciones http incluye method y url.
 - Para acciones mcp incluye tool y arguments.
+- Si el ticket define un artefacto esperado y ya verificaste su contenido o estado esperado, considera completada la remediacion principal.
+- Si acabas de modificar un archivo y el ticket exige verificacion, la siguiente accion obligatoria es leer o comprobar ese mismo archivo; no cierres el ticket en la misma iteracion logica.
+- Tras completar la remediacion principal, la unica accion adicional aceptable es una accion minima de cierre, escalacion o actualizacion externa del ticket.
+- No conviertas la post-verificacion en una cadena abierta de nuevas verificaciones sobre artefactos auxiliares.

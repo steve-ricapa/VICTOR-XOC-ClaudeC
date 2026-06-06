@@ -1,0 +1,46 @@
+{
+  "ticket_id": "ticket-remediate-tls-002",
+  "backend_ticket_id": 2,
+  "title": "Actualizar politicas TLS y eliminar cifrados inseguros",
+  "priority": "HIGH",
+  "status": "NEW",
+  "llm_model": "claude-sonnet-4-6",
+  "skills": [
+    "secure-file-remediation",
+    "vulnerability-triage"
+  ],
+  "client_context": {
+    "client_id": "sophia-demo",
+    "capability_level": "C2_CONTROLADO",
+    "environment": "on-prem"
+  },
+  "incident": {
+    "source": "Sophia",
+    "incident_id": "INC-LAB-TLS-002",
+    "vulnerability_id": "TLS-INSECURE-CIPHERS",
+    "severity": "HIGH",
+    "summary": "Se detecto TLS 1.2 y cifrados RC4/3DES en tls_policy.conf"
+  },
+  "task": {
+    "objective": "Forzar TLS 1.3 y eliminar cifrados inseguros",
+    "target_file": "runtime/lab/tls_policy.conf",
+    "instructions": [
+      "Lee el archivo runtime/lab/tls_policy.conf",
+      "Cambia TLS_VERSION=1.2 a TLS_VERSION=1.3",
+      "Elimina RC4 y 3DES de la directiva CIPHERS. Deja el resto de cifrados intactos.",
+      "Asegurate de mantener el formato original."
+    ],
+    "expected_artifact": "runtime/lab/tls_policy.conf",
+    "acceptance_criteria": [
+      "TLS_VERSION debe ser exactamente 1.3",
+      "La linea CIPHERS no debe contener RC4",
+      "La linea CIPHERS no debe contener 3DES"
+    ]
+  },
+  "ticket_api": {
+    "auth_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc4MDM1NzgzNiwianRpIjoiYmYzM2FlMTgtMTJmMS00YTE2LThiN2UtMDVjYjUyZjQ5ODlmIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjQiLCJuYmYiOjE3ODAzNTc4MzYsImNzcmYiOiI5MTk2NDRhMi1mMGRlLTQ2OTktYWFkMy02ZDcxNzczOTYzYTYiLCJleHAiOjE3ODAzNTgxMzYsImNvbXBhbnlfaWQiOjIsInJvbGUiOiJBRE1JTiJ9.XeyIeYyOo_veYB7-ZCZhbFCHRsa2JyFkfSNba0WGemg",
+    "base_url": "https://txdxai-flask.replit.app/api",
+    "update_template": "/tickets/{ticket_id}",
+    "decision_template": "/tickets/{ticket_id}/decision/select"
+  }
+}

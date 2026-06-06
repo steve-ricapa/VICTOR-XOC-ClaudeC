@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.actions.action_gateway import ActionGateway
 from core.llm.claude_adapter import ClaudeAdapter
 from core.orchestrator.victor_loop import VictorLoop
+from core.orchestrator import pause_resume_controller
 
 
 _BANNER = r"""
@@ -129,14 +130,50 @@ def _run_loop(
     loop_kwargs: dict[str, Any] = {"max_iterations": max(1, int(max_iterations))}
     if claude_adapter_module is not None:
         loop_kwargs["claude_adapter_module"] = claude_adapter_module
+        
+    # Inyeccion de Logger Visual para Streaming en Terminal
+    from core.observability.cli_logger import CLIAuditLogger
+    from scripts.interactive_cli import InteractiveDecisionMenu
+    loop_kwargs["audit_logger_module"] = CLIAuditLogger(debug_mode=True)
+    
     loop = VictorLoop(**loop_kwargs)
-    result = loop.run(ticket)
-    _print_json(result, pretty=pretty)
-
-    execution_status = str(result.get("execution_status") or "")
-    if execution_status in {"COMPLETED", "WAITING_DECISION"}:
-        return 0
-    return 1
+    
+    current_ticket = ticket
+    while True:
+        result = loop.run(current_ticket)
+        execution_status = str(result.get("execution_status") or "")
+        
+        if execution_status == "WAITING_DECISION":
+            pending_decision = result.get("pending_decision", {})
+            choice = InteractiveDecisionMenu.prompt(pending_decision)
+            
+            if not choice:
+                print("\nVolcando estado de pausa:")
+                _print_json(result, pretty=pretty)
+                return 1
+                
+            print(f"\n[CLI] Generando ticket de reanudacion con opcion {choice}...")
+            agent_config = _read_yaml(PROJECT_ROOT / "config" / "agent.yaml")
+            ticket_api_settings = _extract_ticket_api_settings(agent_config)
+            
+            resumed_ticket = pause_resume_controller.build_resume_ticket(
+                decision_id=pending_decision.get("decision_id"),
+                option=choice,
+                actor="terminal_user",
+                comment="Aprobado interactivamente en consola"
+            )
+            
+            if "ticket_api" not in resumed_ticket and ticket_api_settings:
+                resumed_ticket["ticket_api"] = ticket_api_settings
+                
+            current_ticket = resumed_ticket
+            print("[CLI] Reanudando ciclo de ejecucion (VICTOR_LOOP)...")
+            continue
+            
+        _print_json(result, pretty=pretty)
+        if execution_status == "COMPLETED":
+            return 0
+        return 1
 
 
 def simulate_ticket_patch_flow(
@@ -532,6 +569,19 @@ def _extract_llm_settings(agent_config: dict[str, Any]) -> dict[str, Any]:
     settings.setdefault("model", "claude-sonnet-4-6")
     settings.setdefault("temperature", 0.0)
     settings.setdefault("max_tokens", 4000)
+    return settings
+
+
+def _extract_ticket_api_settings(agent_config: dict[str, Any]) -> dict[str, Any]:
+    raw = agent_config.get("ticket_api")
+    if not isinstance(raw, dict):
+        raw = {}
+    settings = dict(raw)
+    settings.setdefault("update_template", "/tickets/{ticket_id}")
+    settings.setdefault("decision_template", "/tickets/{ticket_id}/decision/select")
+    auth_token = os.environ.get("TICKET_API_ACCESS_TOKEN") or os.environ.get("TICKETS_API_ACCESS_TOKEN")
+    if auth_token and "auth_token" not in settings:
+        settings["auth_token"] = auth_token
     return settings
 
 

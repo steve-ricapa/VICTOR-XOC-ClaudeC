@@ -1,0 +1,46 @@
+{
+  "ticket_id": "ticket-remediate-debug-001",
+  "backend_ticket_id": 2,
+  "title": "Desactivar debug en aplicacion de laboratorio",
+  "priority": "MEDIUM",
+  "status": "NEW",
+  "llm_model": "claude-sonnet-4-6",
+  "skills": [
+    "secure-file-remediation",
+    "vulnerability-triage"
+  ],
+  "client_context": {
+    "client_id": "sophia-demo",
+    "capability_level": "C2_CONTROLADO",
+    "environment": "on-prem"
+  },
+  "incident": {
+    "source": "Sophia",
+    "incident_id": "INC-LAB-APP-001",
+    "vulnerability_id": "APP-DEBUG-ENABLED",
+    "severity": "MEDIUM",
+    "summary": "Modo debug habilitado en aplicacion de laboratorio"
+  },
+  "task": {
+    "objective": "Cambiar debug=true por debug=false",
+    "target_file": "runtime/lab/web_app.ini",
+    "instructions": [
+      "Lee el archivo antes de cambiarlo",
+      "Cambia solo el flag debug a false",
+      "Verifica despues que environment siga intacto y que debug este deshabilitado"
+    ],
+    "expected_artifact": "runtime/lab/web_app.ini",
+    "expected_content": "[app]\ndebug=false\nenvironment=production\n\n[server]\nport=8080",
+    "acceptance_criteria": [
+      "debug queda en false",
+      "environment sigue en production",
+      "port sigue en 8080"
+    ]
+  },
+  "ticket_api": {
+    "auth_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc4MDM1Mzc4MiwianRpIjoiOTk2NGE4NjAtY2JjYS00ZTI4LWE3NmYtMjk3YThlYmRhZmQxIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjQiLCJuYmYiOjE3ODAzNTM3ODIsImNzcmYiOiJiODAxYjFhZS1hMTI3LTQxNjAtYmEwNS1kMjRmYWZkOTY5MDciLCJleHAiOjE3ODAzNTQwODIsImNvbXBhbnlfaWQiOjIsInJvbGUiOiJBRE1JTiJ9.6fdJ_CsfvinoVCJ8Sw8Grnao3ffiC60V98dU0ikPyt8",
+    "base_url": "https://txdxai-flask.replit.app/api",
+    "update_template": "/tickets/{ticket_id}",
+    "decision_template": "/tickets/{ticket_id}/decision/select"
+  }
+}
