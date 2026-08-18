@@ -17,7 +17,7 @@ logger = logging.getLogger("victor-server")
 
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-MODEL = os.getenv("ANTHROPIC_MODEL", os.getenv("AZURE_DEPLOYMENT", "claude-sonnet-4-20250514"))
+MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 if ANTHROPIC_API_KEY and AZURE_ENDPOINT:
     client = AnthropicFoundry(api_key=ANTHROPIC_API_KEY, base_url=AZURE_ENDPOINT)
