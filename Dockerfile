@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PORT=8000
 
 WORKDIR /app
 
@@ -29,4 +30,6 @@ RUN mkdir -p \
 
 USER appuser
 
-CMD ["python", "scripts/run_agent.py", "--pretty", "--no-menu"]
+EXPOSE ${PORT}
+
+CMD ["python", "victor_server.py"]

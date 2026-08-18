@@ -15,11 +15,20 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("victor-server")
 
-AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT", "https://aoai-sophia-xoc-eus2.services.ai.azure.com/anthropic")
-AZURE_DEPLOYMENT = os.getenv("AZURE_DEPLOYMENT", "claude-sonnet-4-6")
+AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+MODEL = os.getenv("ANTHROPIC_MODEL", os.getenv("AZURE_DEPLOYMENT", "claude-sonnet-4-20250514"))
 
-client = AnthropicFoundry(api_key=ANTHROPIC_API_KEY, base_url=AZURE_ENDPOINT) if ANTHROPIC_API_KEY else None
+if ANTHROPIC_API_KEY and AZURE_ENDPOINT:
+    client = AnthropicFoundry(api_key=ANTHROPIC_API_KEY, base_url=AZURE_ENDPOINT)
+    logger.info("LLM client: Azure endpoint (%s)", AZURE_ENDPOINT)
+elif ANTHROPIC_API_KEY:
+    from anthropic import Anthropic
+    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    logger.info("LLM client: Anthropic direct (model=%s)", MODEL)
+else:
+    client = None
+    logger.warning("No ANTHROPIC_API_KEY configured - LLM calls will fail")
 
 app = FastAPI(title="Victor On-Premise", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -30,20 +39,66 @@ Tu funcion es analizar tickets de soporte y generar planes de accion ejecutables
 en servidores Windows/Linux. Los planes consisten en comandos shell que se ejecutaran
 secuencialmente en el endpoint objetivo via el executor remoto.
 
-REGLAS:
+REGLAS GENERALES:
 - Cada paso debe tener: order, action (siempre "shell"), command, description, risk_level ("basic"|"controlled"|"risky")
 - Usa rutas con FORWARD slash para compatibilidad multiplataforma
 - Siempre verifica resultados con comandos posteriores
 - Risk level: "basic" = solo lectura, "controlled" = instalacion/escritura, "risky" = delete/remocion
 - En Windows usa variables de entorno como %USERPROFILE% en los comandos
-- Responde SOLO con JSON valido, sin markdown ni explicaciones"""
+- Responde SOLO con JSON valido, sin markdown ni explicaciones
+
+FLUJO PARA ARCHIVOS MALICIOSOS / SEGURIDAD:
+Cuando el ticket mencione archivos maliciosos, virus, trojans, ransomware, reverse shells,
+webshells, minero, spyware, adware, o cualquier amenaza de seguridad:
+
+  FASE 1 - DETECCION (risk_level: "basic"):
+  - Verificar si el archivo sospechoso existe: ls -la <ruta> / dir <ruta>
+  - Identificar el tipo de archivo: file <ruta> / powershell Get-Content
+  - Inspeccionar las primeras lineas: head -20 <ruta>
+  - Verificar procesos relacionados: ps aux | grep <nombre> / tasklist | findstr
+  - Verificar conexiones de red: netstat -tulnp / netstat -an
+  - Verificar cron jobs o tareas programadas: crontab -l / schtasks /query
+
+  FASE 2 - CONTENCION (risk_level: "controlled"):
+  - Crear carpeta de cuarentena: mkdir -p /var/quarantine
+  - Mover archivo a cuarentena (NO eliminar aun): mv <ruta> /var/quarantine/
+  - Si hay proceso activo,Identification and kill: kill -9 <PID> / taskkill /F /PID
+  - Verificar que el proceso termino
+
+  FASE 3 - REMEDIACION (risk_level: "risky"):
+  - Eliminar el archivo de cuarentena: rm -f /var/quarantine/<archivo>
+  - Verificar eliminacion: ls -la /var/quarantine/
+  - Verificar que no quedan procesos activos
+  - Verificar integridad del sistema
+
+  FASE 4 - VERIFICACION (risk_level: "basic"):
+  - Listar archivos en directorios afectados
+  - Verificar permisos de archivos criticos
+  - Comprobar que no hay conexiones sospechosas activas
+
+COMANDOS RECOMENDADOS POR SISTEMA OPERATIVO:
+  Linux:
+    Deteccion: ls -la, file, head, ps aux | grep, netstat -tulnp, crontab -l
+    Contencion: mv, kill -9
+    Remediacion: rm -f, chmod 644
+  Windows:
+    Deteccion: dir, powershell Get-Content, tasklist | findstr, netstat -an, schtasks /query
+    Contencion: move, taskkill /F /PID
+    Remociion: del /f /q, icacls
+
+IMPORTANTE:
+- Siempre comienza con FASE 1 (deteccion) antes de cualquier accion destructiva
+- NUNCA elimines un archivo sin haberlo inspeccionado primero
+- Si el archivo esta en uso, Identificationa el proceso y terminalo antes de eliminar
+- Mantén un registro de todos los pasos ejecutados
+- Si no estas seguro del nivel de amenaza, mantente en FASE 1 hasta confirmar"""
 
 
 def _call_claude(messages: list, system: str = SYSTEM_PROMPT, max_tokens: int = 2000) -> str:
     if not client:
         raise RuntimeError("ANTHROPIC_API_KEY no configurada")
     resp = client.messages.create(
-        model=AZURE_DEPLOYMENT,
+        model=MODEL,
         system=system,
         messages=messages,
         max_tokens=max_tokens,
@@ -83,12 +138,18 @@ async def run_agent(request: Request):
 async def _handle_assessment(ticket_id, tenant_id, subject, description):
     prompt = f"""Analiza si este ticket de soporte se puede resolver automaticamente
 ejecutando comandos shell en el servidor/endpoint remoto.
- 
+
 Ticket: {subject}
 Descripcion: {description}
- 
+
+Considera especialmente:
+- Archivos maliciosos (virus, trojans, ransomware, webshells, mineros)
+- Procesos sospechosos o no autorizados
+- Conexiones de red inusuales
+- Configuraciones comprometidas
+
 Responde SOLO con JSON:
-{{"can_resolve": true/false, "confidence": 0.0-1.0, "assessment_type": "tipo"}}"""
+{{"can_resolve": true/false, "confidence": 0.0-1.0, "assessment_type": "tipo", "requires_human": false, "reason": "razon breve"}}"""
     try:
         text = _call_claude([{"role": "user", "content": prompt}], max_tokens=500)
         result = json5.loads(text)
@@ -109,20 +170,28 @@ Responde SOLO con JSON:
 
 async def _handle_plan(ticket_id, tenant_id, subject, description):
     prompt = f"""Genera un plan de accion en comandos shell para resolver:
- 
+
 Ticket: {subject}
 Descripcion: {description}
- 
+
+Sigue el flujo de seguridad si aplica:
+1. DETECCION: Verificar existencia, tipo, contenido del archivo sospechoso
+2. CONTENCION: Mover a cuarentena (/var/quarantine/) antes de eliminar
+3. REMEDIACION: Eliminar el archivo malicioso
+4. VERIFICACION: Confirmar que la amenaza fue removida
+
 Responde SOLO con JSON:
 {{"plan": [{{"step_id": "uuid", "order": 1, "action": "shell", "command": "comando", "description": "que hace", "risk_level": "basic|controlled|risky"}}], "plan_summary": "resumen", "total_steps": N}}
- 
+
 IMPORTANTE:
 - Los comandos deben funcionar en Windows cmd.exe (o bash en Linux)
 - En Windows usa rutas con %USERPROFILE% (ej: %USERPROFILE%/archivo.exe), en Linux usa rutas absolutas
 - Para detectar archivos usa: dir/findstr (Windows) o ls/grep (Linux)
+- Para cuarentena usa: move (Windows) o mv (Linux)
 - Para eliminar usa: del /f /q (Windows) o rm -f (Linux)
 - Cada comando debe ser autocontenido (usa && para encadenar)
-- ESCAPA todas las comillas dentro del JSON con \\" (ej: command: \"dir \\\"%USERPROFILE%\\\"\")"""
+- ESCAPA todas las comillas dentro del JSON con \\" (ej: command: \"dir \\\"%USERPROFILE%\\\"\")
+- NUNCA elimines sin antes inspeccionar el archivo"""
     try:
         text = _call_claude([{"role": "user", "content": prompt}])
         result = json5.loads(text)

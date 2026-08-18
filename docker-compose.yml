@@ -1,0 +1,38 @@
+services:
+  victor-server:
+    build: .
+    container_name: victor-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      - AZURE_ENDPOINT=${AZURE_ENDPOINT:-}
+      - AZURE_DEPLOYMENT=${AZURE_DEPLOYMENT:-claude-sonnet-4-6}
+      - EXECUTOR_URL=http://executor:8888
+      - PORT=8000
+      - STAGE=${STAGE:-prod}
+    depends_on:
+      executor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  executor:
+    build: .
+    container_name: victor-executor
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    command: ["python", "laptop_agent.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
